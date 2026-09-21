@@ -1,0 +1,13 @@
+defaults:
+  - train
+  - _self_
+
+checkpoint: null  # null: untrained pipeline check
+output: flowpilot_dst.onnx
+onnx_opset_version: 17
+batch_size: 1
+top_k: 6  # plans returned per call, ranked by score
+
+hydra:
+  job:
+    chdir: false

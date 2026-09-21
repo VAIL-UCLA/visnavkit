@@ -48,8 +48,12 @@ IMAGENET_MEAN, IMAGENET_STD = (0.485, 0.456, 0.406), (0.229, 0.224, 0.225)
 
 
 def masked_rows(mask):
-    """``(B, T)`` bool -> flat indices of the True entries."""
-    return mask.reshape(-1).nonzero().squeeze(1)
+    """``(B, T)`` bool -> flat indices of the True entries; a static ``arange`` while tracing a full mask,
+    so the export graph keeps fixed shapes."""
+    flat = mask.reshape(-1)
+    if torch.jit.is_tracing() and bool(flat.all()):
+        return torch.arange(flat.numel(), device=mask.device)
+    return flat.nonzero().squeeze(1)
 
 
 def wrap(angle):
@@ -59,9 +63,10 @@ def wrap(angle):
 def sincos_2d(h, w, dim, device, dtype):
     """Fixed 2-D sin-cos positional embedding ``(h w, dim)``, ``dim / 4`` frequencies per axis."""
     quarter = dim // 4
-    freq = torch.exp(-math.log(10000.0) * torch.arange(quarter, device=device) / quarter)
-    yy = (torch.arange(h, device=device)[:, None, None] * freq).expand(h, w, quarter)
-    xx = (torch.arange(w, device=device)[None, :, None] * freq).expand(h, w, quarter)
+    f32 = dict(device=device, dtype=torch.float32)  # float32 throughout: the tracer promotes int arange to float64
+    freq = torch.exp(-math.log(10000.0) * torch.arange(quarter, **f32) / quarter)
+    yy = (torch.arange(h, **f32)[:, None, None] * freq).expand(h, w, quarter)
+    xx = (torch.arange(w, **f32)[None, :, None] * freq).expand(h, w, quarter)
     return torch.cat([yy.sin(), yy.cos(), xx.sin(), xx.cos()], -1).reshape(h * w, dim).to(dtype)
 
 
@@ -109,7 +114,8 @@ class PairEncoder(nn.Module):
         prev_mask = torch.cat([frame_mask.new_zeros(b, 1), frame_mask[:, :-1]], 1)
         if self.training and self.p_drop_prev > 0:
             prev_mask = prev_mask & (torch.rand(b, t, device=frames.device) >= self.p_drop_prev)
-        gh, gw = -(-frames.shape[-2] // self.stride), -(-frames.shape[-1] // self.stride)
+        s = self.stride  # ceil with positive operands only: ONNX integer Div truncates toward zero
+        gh, gw = (frames.shape[-2] + s - 1) // s, (frames.shape[-1] + s - 1) // s
         glob = frames.new_zeros(b * t, self.dim)
         patches = frames.new_zeros(b * t, self.dim, gh, gw)
         speed = frames.new_zeros(b * t, 1)
@@ -222,7 +228,8 @@ class TemporalFusion(nn.Module):
         b, t, _ = feats.shape
         x = self.proj(feats) + self.pos.weight[:t]
         mask = generate_causal_mask(t, self.mask_p if self.training else 0.0, x.device)
-        drop = ~valid[:, None, :] & ~torch.eye(t, dtype=torch.bool, device=x.device)
+        eye = torch.eye(t, device=x.device) > 0  # float EyeLike + Greater: ONNX Runtime has no bool EyeLike
+        drop = ~valid[:, None, :] & ~eye
         mask = mask[None].expand(b, t, t).masked_fill(drop, float("-inf")).repeat_interleave(self.num_heads, 0)
         for layer in self.layers:
             x = layer(x, src_mask=mask)
@@ -384,7 +391,7 @@ class AnchorFlowHead(nn.Module):
     def mode_tokens(self, x, t):
         """Noisy ``(N, K, T, 2)`` + flow time ``(N,)`` -> ``(N, K, D)``: sine waypoint features, t, the anchor's embedding."""
         quarter = self.wp_dim // 4
-        freq = torch.exp(-math.log(10000.0) * torch.arange(quarter, device=x.device) / quarter)
+        freq = torch.exp(-math.log(10000.0) * torch.arange(quarter, device=x.device, dtype=torch.float32) / quarter)
         ang = x[..., None] * (2 * math.pi) * freq  # (N, K, T, 2, quarter)
         wp = torch.cat([ang[..., 1, :].sin(), ang[..., 1, :].cos(), ang[..., 0, :].sin(), ang[..., 0, :].cos()], -1)
         a = self.w1(wp.flatten(2).to(self.w1.weight.dtype))
@@ -534,7 +541,7 @@ class FlowPilotDST(nn.Module):
         self.action_decoder = AnchorFlowHead(dim, **dict(head or {}))
         self.num_embodiments, self.goal_mask_p, self.speed_weight = num_embodiments, goal_mask_p, speed_weight
 
-    def forward(
+    def encode(
         self,
         vision,
         goal=None,
@@ -544,7 +551,9 @@ class FlowPilotDST(nn.Module):
         ego=None,
         embodiment_id=None,
         action_bounds=None,
-    ) -> DSTOutput:
+    ):
+        """The stages 1-4 of the module docstring -> the kv tokens ``(N, L, D)`` of the frames that hold a frame,
+        their ego ``(N, 2)``, bounds ``(N, 2, 5)``, flat indices ``idx`` ``(N,)``, speed ``(B, T, 1)``, pair mask."""
         b, t = vision.shape[:2]
         device = vision.device
         if ego is None or action_bounds is None:
@@ -583,8 +592,24 @@ class FlowPilotDST(nn.Module):
         }
         kv = self.tokens(feats, torch.arange(t, device=device).repeat(b)[idx], embodiment_id.repeat_interleave(t)[idx])
         ego_vw, bounds = rows(ego)[:, :2].float(), action_bounds.repeat_interleave(t, 0)[idx].float()
+        return kv, ego_vw, bounds, idx, speed, pair_mask, frame_mask
 
-        plans = torch.zeros(b * t, self.action_decoder.flat_size, device=device)
+    def forward(
+        self,
+        vision,
+        goal=None,
+        frame_mask=None,
+        route_patch=None,
+        route_mask=None,
+        ego=None,
+        embodiment_id=None,
+        action_bounds=None,
+    ) -> DSTOutput:
+        b, t = vision.shape[:2]
+        kv, ego_vw, bounds, idx, speed, pair_mask, frame_mask = self.encode(
+            vision, goal, frame_mask, route_patch, route_mask, ego, embodiment_id, action_bounds
+        )
+        plans = torch.zeros(b * t, self.action_decoder.flat_size, device=vision.device)
         logits = None
         if not self.training and len(idx):
             plans[idx], _, logits = self.action_decoder.plans(kv, bounds, ego_vw)
@@ -600,6 +625,20 @@ class FlowPilotDST(nn.Module):
         rows = (plan.idx % seq_len == seq_len - 1).nonzero().squeeze(1)
         modes, prob = self.action_decoder.top_modes(plan.tokens[rows], plan.bounds[rows], plan.ego_vw[rows], k)
         return plan.idx[rows] // seq_len, modes, prob, plan.ego_vw[rows]
+
+    @torch.no_grad()
+    def deploy(self, vision, goal, route_patch, ego, action_bounds, k=6):
+        """The export path: one decision per window, from its current (last) slot, every slot holding a frame and a
+        route. -> metric modes ``(B, k, T, 5)`` [x, y, yaw, v, w], probabilities ``(B, k)`` and the speed ``(B, 1)``.
+        No embodiment input: a recipe that keeps the embodiment token gets its unknown-embodiment row."""
+        b, t = vision.shape[:2]
+        full = torch.ones(b, t, dtype=torch.bool, device=vision.device)
+        kv, ego_vw, bounds, _, speed, _, _ = self.encode(
+            vision, goal, full, route_patch, full, ego, None, action_bounds
+        )
+        rows = torch.arange(b, device=vision.device) * t + (t - 1)  # each window's current frame
+        modes, prob = self.action_decoder.top_modes(kv[rows], bounds[rows], ego_vw[rows], k)
+        return modes, prob, speed[:, -1]
 
     def example_batch(self, batch_size, frames, image_hw, device=None):
         """Synthetic ``(vision, goal, {modality key: value})`` inputs for shape checks; every slot holds a frame."""

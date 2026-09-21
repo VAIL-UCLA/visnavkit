@@ -90,6 +90,24 @@ def test_the_embodiment_token_can_be_left_out():
     assert out.plan.tokens.shape == (6, 1 + 2 + 3, 32)  # global, 1 x 2 patches, route, goal, temporal
 
 
+def test_deploy_matches_the_top_modes_of_an_eval_forward():
+    """The export path decodes the same plans as the training-time panels read."""
+    model, batch = make_model("model.embodiment_token=false").eval(), make_batch()
+    batch["frame_mask"] = torch.ones_like(FRAME_MASK)
+    batch["route_mask"] = torch.ones_like(FRAME_MASK)
+    vision, goal, mods = inputs(batch)
+    with torch.no_grad():
+        out = model(vision, goal, **mods)
+        windows, modes, probs, _ = model.current_modes(out.plan, seq_len=4, k=3)
+        deployed, deployed_probs, speed = model.deploy(
+            vision, goal, batch["route_patch"], batch["ego"], batch["action_bounds"], k=3
+        )
+    assert torch.equal(windows, torch.tensor([0, 1]))
+    torch.testing.assert_close(deployed, modes)
+    torch.testing.assert_close(deployed_probs, probs)
+    torch.testing.assert_close(speed, out.speed.reshape(2, 4, 1)[:, -1])
+
+
 def test_speed_head_is_supervised_on_whole_pairs_only():
     """An empty or dropped previous slot is black to the network and takes the slot's speed target with it."""
     model, batch = make_model().train(), make_batch()

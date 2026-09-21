@@ -30,6 +30,7 @@ rich = ["rich>=13.0"]
 visnavkit-train = "visnavkit.scripts.train:main"
 visnavkit-train-route = "visnavkit.scripts.train_route:main"
 visnavkit-export = "visnavkit.scripts.export:main"
+visnavkit-export-dst = "visnavkit.scripts.export_dst:main"
 visnavkit-benchmark = "visnavkit.scripts.benchmark:main"
 visnavkit-benchmark-data = "visnavkit.scripts.benchmark_dataloader:main"
 visnavkit-sanity-check = "visnavkit.scripts.sanity_check:main"
