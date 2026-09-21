@@ -9,7 +9,8 @@ Trains on ``dataset=pose`` windows with frames: ``vision`` (B, T, 3, H, W) in [0
    none or it is dropped w.p. ``p_drop_prev`` in training) through the timm backbone, only the slots with a
    frame as one flat batch -> global (GAP) and patch features; ``SpeedHead`` on the global feature,
    supervised where the pair is whole (``pair_mask``). A corpus below the slot rate never fills two slots
-   in a row: its previous frame is always black and it never supervises the speed head.
+   in a row: its previous frame is always black and it never supervises the speed head. ``frame_encoder`` swaps
+   the whole stage for a module with the same interface (``flowpilot_dune_dst``: the frozen single-frame DuneEncoder).
 2. ``RouteEncoder``: the frozen route VAE encoder on the slots with a route, zeros elsewhere.
 3. ``TemporalFusion``: [global | route] -> D + slot embedding -> causal self-attention over the slots
    (random past drop ``mask_p`` in training; a slot without a frame is no one's key), zero where no frame.
@@ -524,9 +525,12 @@ class FlowPilotDST(nn.Module):
         temporal=None,
         route=None,
         head=None,
+        frame_encoder=None,
     ):
         super().__init__()
-        self.pair_encoder = PairEncoder(backbone_name, pretrained, p_drop_prev)
+        self.pair_encoder = (  # frame_encoder: a module with PairEncoder's interface, e.g. DuneEncoder
+            PairEncoder(backbone_name, pretrained, p_drop_prev) if frame_encoder is None else frame_encoder
+        )
         self.route_encoder = RouteEncoder(**dict(route or {}))
         c, r = self.pair_encoder.dim, self.route_encoder.dim
         self.temporal_encoder = TemporalFusion(c + r, dim, seq_len, **dict(temporal or {}))

@@ -229,3 +229,23 @@ def test_top_modes_rank_the_anchors_and_keep_the_best_decode():
     zeros = torch.zeros(2, *model.action_decoder.anchors.shape)
     best, _ = model.action_decoder.sample(out.plan.tokens[rows], out.plan.bounds[rows], out.plan.ego_vw[rows], zeros)
     torch.testing.assert_close(modes[:, 0], best)  # rank 1 = the noise-0 plan the metrics read
+
+
+def test_dune_frame_encoder_is_frozen_and_pools_single_frames():
+    """flowpilot_dune_dst: one frame per slot through the frozen DUNE, 16 x 28 cells pooled x4, no whole pair."""
+    import os
+
+    import pytest
+
+    if not os.path.isdir(os.path.join(torch.hub.get_dir(), "naver_dune_main")):
+        pytest.skip("naver/dune is not in the torch.hub cache")
+    from visnavkit.models.dune_encoder import DuneEncoder
+
+    encoder = DuneEncoder(downscale=4).train()
+    frames, mask = torch.rand(1, 2, 3, 216, 384), torch.tensor([[True, False]])
+    glob, patches, speed, pair = encoder(frames, mask)
+    assert patches.shape == (1, 2, 768, 4, 7) and glob.shape == (1, 2, 768)
+    assert not encoder.encoder.training and not any(p.requires_grad for p in encoder.encoder.parameters())
+    assert (glob[0, 1] == 0).all() and not pair.any() and (speed == 0).all()
+    glob.sum().backward()
+    assert encoder.adapt.weight.grad is not None
