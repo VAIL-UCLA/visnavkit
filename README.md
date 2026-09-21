@@ -93,11 +93,13 @@ One row per deployable variant: the paper authors' **official** weights, a VisNa
 | --- | --- | --- | --- | --- | --- |
 | `gnm-point` | `gnm` + point goal | MobileNetV2 -> regression, 3.5M | — | — | — |
 | `flowpilot-edge` | `flowpilot` | FastViT-MA36 -> anchored flow DiT, 300M | — | — | — |
+| `flowpilot-dst-small` | `flowpilot_dst_clips1k` | FastViT-T12 pairs -> anchored flow DiT (256, x2), 21.4M ([ONNX IO](docs/flowpilot_dst_onnx.md)) | — | TODO | TODO |
 
 ```bash
 uv run visnavkit-train dataset=torch model=gnm model/goal_encoder=point \
   ~model.goal_encoder.backbone_name ~model.goal_encoder.stack_observation  # gnm-point
 uv run visnavkit-train dataset=torch model=flowpilot                       # flowpilot-edge
+uv run visnavkit-train experiment=flowpilot_dst_clips1k                   # flowpilot-dst-small
 ```
 
 Where each paper publishes its own weights, and the published ONNX graphs the benchmark downloads:
