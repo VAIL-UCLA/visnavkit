@@ -134,7 +134,7 @@ def profile(model, inputs, device, warmup, iters, euler_steps):
     head = model.action_decoder
     glob, _, _, _ = model.pair_encoder(vision, full)
     route_feat = model.route_encoder(route, full)
-    fused = torch.cat([glob, route_feat], -1)
+    fused = model.temporal_inputs(glob, route_feat)
     kv, ego_vw, rows_bounds, *_ = model.encode(vision, goal, full, route, full, ego, None, bounds)
     kv, ego_vw, rows_bounds = kv[-1:], ego_vw[-1:], rows_bounds[-1:]  # the current frame
     zeros = torch.zeros(1, *head.anchors.shape, device=device)

@@ -15,12 +15,18 @@ seq_len: ${common.seq_length}
 num_embodiments: 14  # ids 0 .. 13; row 14 = unknown
 embodiment_token: true  # false: no embodiment token (one corpus, e.g. clips1k)
 goal_mask_p: 0.5  # training: the goal token is the learned empty-goal token w.p. 0.5 per window
+input_norm: true  # global and route each Linear -> LayerNorm to dim before the temporal concat (false: older checkpoints)
 speed_weight: 1.0  # speed head, on whole pairs only: corpora below the slot rate (5 fps = 1 slot in 4) never supervise it
 temporal:
   num_layers: 2
   num_heads: 8
   dropout: 0.1
   mask_p: 0.1  # training: random past-slot drop in the causal attention
+  post_norm: true  # a final LayerNorm on the temporal output (false: older checkpoints)
+context:  # self-attention over each frame's kv tokens before the DiT (num_layers 0: none, older checkpoints)
+  num_layers: 2
+  num_heads: 8
+  dropout: 0.1
 route:
   weights: null  # the frozen route VAE checkpoint (RouteEncoder, 3 classes, 80 x 80); null = random (tests only)
   num_classes: 3

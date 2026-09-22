@@ -209,7 +209,7 @@ class AnchorFlowHead(nn.Module):
             t = torch.full((n,), s0 + i * dt, device=kv.device)
             velocity, state, score = self.denoise(x, t, self.time_embed(t).to(kv.dtype), kv, ego)
             x = x + dt * velocity.float()
-        return torch.cat([x.clamp(-3.0, 3.0), state.float()], -1), score.float()
+        return torch.cat([x, state.float()], -1), score.float()
 
     @torch.no_grad()
     def sample(self, kv, bounds, ego_vw, noise=None, num_steps=None):

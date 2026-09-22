@@ -11,7 +11,7 @@ class TemporalFusion(nn.Module):
 
     reduction = "none"  # LitModel: one target per frame
 
-    def __init__(self, in_dim, dim, seq_len, num_layers=2, num_heads=8, dropout=0.1, mask_p=0.1):
+    def __init__(self, in_dim, dim, seq_len, num_layers=2, num_heads=8, dropout=0.1, mask_p=0.1, post_norm=False):
         super().__init__()
         self.proj = nn.Sequential(nn.Linear(in_dim, dim), nn.LayerNorm(dim))
         self.pos = nn.Embedding(seq_len, dim)
@@ -19,6 +19,7 @@ class TemporalFusion(nn.Module):
             nn.TransformerEncoderLayer(dim, num_heads, 4 * dim, dropout, "gelu", batch_first=True, norm_first=True)
             for _ in range(num_layers)
         )
+        self.norm = nn.LayerNorm(dim) if post_norm else None  # the pre-norm layers leave the residual stream raw
         self.num_heads, self.mask_p = num_heads, mask_p
 
     def forward(self, feats, valid):
@@ -31,4 +32,6 @@ class TemporalFusion(nn.Module):
         mask = mask[None].expand(b, t, t).masked_fill(drop, float("-inf")).repeat_interleave(self.num_heads, 0)
         for layer in self.layers:
             x = layer(x, src_mask=mask)
+        if self.norm is not None:
+            x = self.norm(x)
         return x * valid[..., None]

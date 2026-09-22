@@ -1,5 +1,6 @@
 # @package _global_
-# FlowPilot-DUNE-DST on clips1k: flowpilot_dst_clips1k at dim 512 (2 temporal, 2 DiT, no embodiment token, goal mask 0.5,
+# FlowPilot-DUNE-DST on clips1k: flowpilot_dst_clips1k at dim 1024 (2 temporal, 2 context self-attention, 2 DiT, every
+# FFN 4 x dim; no embodiment token, goal mask 0.5,
 # grad clip 5) with the frozen DUNE frame encoder (model/flowpilot_dune_dst.yaml). Pass the donor ViT:
 #   model.frame_encoder.weights=<reference UnifiedModel ckpt, or the encoder's state dict extracted from it>
 defaults:
@@ -10,4 +11,10 @@ defaults:
 exp_name: flowpilot_dune_dst_clips1k
 
 model:
-  dim: 512  # token / temporal / DiT width (flowpilot_dst_clips1k: 256): 118.4M total, 23.8M trainable
+  dim: 1024  # token / temporal / context / DiT width (flowpilot_dst_clips1k: 256): 206.7M total, 112.1M trainable (DUNE ViT and route VAE frozen)
+  temporal:
+    num_layers: 2
+  context:
+    num_layers: 2
+  head:
+    num_layers: 2

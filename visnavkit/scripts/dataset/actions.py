@@ -4,7 +4,7 @@ A ``dataset=pose`` window's action is its current frame's future ``[x, y, yaw, v
 per-step ``[dx, dy, dyaw, v, w]``. Every corpus — a clip's first directory under ``data_root`` —
 gets its own bounds (p0.5 / p99.5 per channel; dy, dyaw and w symmetric, so a horizontal flip stays
 a mirror), and ``(a - lo) / (hi - lo)`` puts every embodiment on one ~[0, 1] scale. The anchors are
-the k-means centres of the normalised dx, dy over all corpora: clipped to [0, 1], every window
+the k-means centres of the normalised dx, dy over all corpora (unclipped), every window
 joined by its mirror so the vocabulary is left / right balanced.
 """
 
@@ -130,7 +130,7 @@ def fit_action_anchors(
     (output_dir / "action_bounds.json").write_text(json.dumps({c: b.tolist() for c, b in bounds.items()}, indent=1))
 
     unit = {c: (samples[c][..., :2] - bounds[c][0, :2]) / (bounds[c][1, :2] - bounds[c][0, :2]) for c in samples}
-    points = torch.from_numpy(np.concatenate([np.clip(u, 0.0, 1.0) for u in unit.values()]))
+    points = torch.from_numpy(np.concatenate(list(unit.values())))
     points = torch.cat([points, points * torch.tensor([1.0, -1.0]) + torch.tensor([0.0, 1.0])])  # + the mirrors
     device = "cuda" if torch.cuda.is_available() else "cpu"
     centres, assignment = kmeans(points.flatten(1).to(device), num_anchors, iters=300, seed=seed)

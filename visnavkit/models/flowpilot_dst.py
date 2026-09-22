@@ -12,12 +12,13 @@ Trains on ``dataset=pose`` windows with frames: ``vision`` (B, T, 3, H, W) in [0
    in a row: its previous frame is always black and it never supervises the speed head. ``frame_encoder`` swaps
    the whole stage for a module with the same interface (``flowpilot_dune_dst``: the frozen single-frame DuneEncoder).
 2. ``RouteEncoder``: the frozen route VAE encoder on the slots with a route, zeros elsewhere.
-3. ``TemporalFusion``: [global | route] -> D + slot embedding -> causal self-attention over the slots
+3. ``TemporalFusion``: [global | route] (``input_norm``: each Linear -> LayerNorm to D first) -> D + slot embedding -> causal self-attention over the slots
    (random past drop ``mask_p`` in training; a slot without a frame is no one's key), zero where no frame.
 4. ``FeatureTokens``, per frame with a frame: [global, gh x gw patches (+ 2-D sin-cos), route, goal, temporal],
    each Linear -> D + type + slot embedding, + one embodiment token (``embodiment_token``, off for one corpus). The goal token is an MLP of
    [distance / 100, cos, sin]; w.p. ``goal_mask_p`` per window in training, and whenever no goal is given,
    it is the learned empty-goal token.
+   ``context.num_layers`` self-attention layers then mix one frame's tokens (0: none, older checkpoints).
 5. ``AnchorFlowHead`` (the reference AnchorFlowPlanner): K anchors of normalised per-step dx, dy; queries
    x_t^k = (1 - t) eps + t anchor_k -> mode tokens (+ the anchor's embedding + the ego [v, w] embedding);
    ``num_layers`` x [adaLN(t) cross-attention to the kv tokens -> FF], no self-attention between modes;
@@ -108,6 +109,8 @@ class FlowPilotDST(nn.Module):
         route=None,
         head=None,
         frame_encoder=None,
+        input_norm=False,
+        context=None,
     ):
         super().__init__()
         self.pair_encoder = (  # frame_encoder: a module with PairEncoder's interface, e.g. DuneEncoder
@@ -115,7 +118,11 @@ class FlowPilotDST(nn.Module):
         )
         self.route_encoder = RouteEncoder(**dict(route or {}))
         c, r = self.pair_encoder.dim, self.route_encoder.dim
-        self.temporal_encoder = TemporalFusion(c + r, dim, seq_len, **dict(temporal or {}))
+        self.input_norm = input_norm
+        if input_norm:  # global and route each Linear -> LayerNorm to dim before the concat: neither sets the scale
+            self.global_in = nn.Sequential(nn.Linear(c, dim), nn.LayerNorm(dim))
+            self.route_in = nn.Sequential(nn.Linear(r, dim), nn.LayerNorm(dim))
+        self.temporal_encoder = TemporalFusion(2 * dim if input_norm else c + r, dim, seq_len, **dict(temporal or {}))
         self.goal = nn.Sequential(nn.Linear(3, dim), nn.GELU(), nn.Linear(dim, dim))
         self.no_goal = nn.Parameter(torch.randn(dim) * 0.02)
         self.tokens = FeatureTokens(
@@ -123,6 +130,13 @@ class FlowPilotDST(nn.Module):
             dim,
             seq_len,
             num_embodiments if embodiment_token else None,
+        )
+        ctx = {"num_layers": 0, "num_heads": 8, "dropout": 0.1, **dict(context or {})}
+        self.context = nn.ModuleList(  # self-attention over one frame's kv tokens before the DiT reads them
+            nn.TransformerEncoderLayer(
+                dim, ctx["num_heads"], 4 * dim, ctx["dropout"], "gelu", batch_first=True, norm_first=True
+            )
+            for _ in range(ctx["num_layers"])
         )
         self.action_decoder = AnchorFlowHead(dim, **dict(head or {}))
         self.num_embodiments, self.goal_mask_p, self.speed_weight = num_embodiments, goal_mask_p, speed_weight
@@ -153,7 +167,7 @@ class FlowPilotDST(nn.Module):
 
         glob, patches, speed, pair_mask = self.pair_encoder(vision, frame_mask)
         route = self.route_encoder(route_patch, route_mask).to(glob.dtype)
-        temporal = self.temporal_encoder(torch.cat([glob, route], -1), frame_mask)
+        temporal = self.temporal_encoder(self.temporal_inputs(glob, route), frame_mask)
 
         idx = masked_rows(frame_mask)
 
@@ -177,8 +191,17 @@ class FlowPilotDST(nn.Module):
             "temporal": rows(temporal),
         }
         kv = self.tokens(feats, torch.arange(t, device=device).repeat(b)[idx], embodiment_id.repeat_interleave(t)[idx])
+        for layer in self.context:
+            kv = layer(kv)
         ego_vw, bounds = rows(ego)[:, :2].float(), action_bounds.repeat_interleave(t, 0)[idx].float()
         return kv, ego_vw, bounds, idx, speed, pair_mask, frame_mask
+
+    def temporal_inputs(self, glob, route):
+        """``(B, T, C)``, ``(B, T, R)`` -> the temporal stage's input [global | route]; with ``input_norm`` each is
+        projected and normalised first."""
+        if self.input_norm:
+            glob, route = self.global_in(glob), self.route_in(route)
+        return torch.cat([glob, route], -1)
 
     def forward(
         self,
