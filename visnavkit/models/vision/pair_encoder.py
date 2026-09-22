@@ -73,4 +73,5 @@ class PairEncoder(nn.Module):
                 )
             patches[idx], glob[idx] = p.to(patches.dtype), p.mean((2, 3)).to(glob.dtype)
             speed[idx] = self.speed_head(glob[idx]).to(speed.dtype)
+
         return glob.view(b, t, -1), patches.view(b, t, self.dim, gh, gw), speed.view(b, t, 1), frame_mask & prev_mask
