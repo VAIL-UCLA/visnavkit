@@ -33,6 +33,10 @@ trainer:
     check_val_every_n_epoch: 25
     num_sanity_val_steps: 0
     log_every_n_steps: 4
+  display:
+    model_summary: stages  # one row per stage, with its source path:line
+    print_config: true
+    batch_summary: 8
   logging:
     save_top_k_ckpts: 0
     # train is null: batch_idx restarts every 4-batch epoch, so any N would log every epoch; val panels at each

@@ -9,8 +9,6 @@ lands from the recipe's. Times: each ``encode`` stage, one Euler step (``denoise
 decode per step count and the whole ``deploy``. Inputs are synthetic (``export_dst.example_inputs``).
 """
 
-import inspect
-import os
 import time
 
 import hydra
@@ -20,6 +18,7 @@ from omegaconf import DictConfig, OmegaConf
 from visnavkit.benchmark.export import load_native_model
 from visnavkit.scripts.export import reparameterize_model
 from visnavkit.scripts.export_dst import example_inputs
+from visnavkit.utils.display import source
 
 
 def check(name, ok):
@@ -45,18 +44,6 @@ def params(module):
     total = sum(p.numel() for p in module.parameters())
     trainable = sum(p.numel() for p in module.parameters() if p.requires_grad)
     return f"{trainable / 1e6:.2f}/{total / 1e6:.2f}M"
-
-
-def source(owner, name, module):
-    """Clickable ``path:line``: a visnavkit class's definition, else the line in ``owner.__init__`` that builds it
-    (a torch ``Sequential`` / ``Linear`` says more there than in torch's source)."""
-    target, line = type(module), None
-    if not target.__module__.startswith("visnavkit"):
-        target = type(owner)
-        lines, start = inspect.getsourcelines(target.__init__)
-        line = next((start + i for i, text in enumerate(lines) if f"self.{name}" in text), start)
-    path = os.path.relpath(inspect.getsourcefile(target))
-    return f"{path}:{line or inspect.getsourcelines(target)[1]}"
 
 
 def print_modules(model):

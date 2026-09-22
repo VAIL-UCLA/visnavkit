@@ -300,6 +300,7 @@ class PoseWindowDataset(Dataset):
 
         ego = {"past_xy": past_xy, "yaw": heading[:, None], "speed": vs[:, None], "yaw_rate": ws[:, None]}
         sample = dict(
+            index=torch.tensor(idx),  # -> self.windows[idx], the source (video, current frame)
             frame_times_s=torch.tensor(slot_times, dtype=torch.float64),
             future_poses=torch.from_numpy(future),
             target_times_s=torch.tensor(self.t_anchors, dtype=torch.float32),

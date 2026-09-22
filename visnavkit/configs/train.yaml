@@ -41,6 +41,8 @@ trainer:
     refresh_every_n_steps: 1  # tqdm / rich refresh rate; lines: steps between lines (e.g. 50)
     model_summary: lightning  # lightning (the reference: depth-1 table) | deep | rich (the rich extra) | stages | none
     summary_depth: 2  # deep / rich: module levels shown
+    print_config: false  # true: print the resolved config (the run's hyperparameters) at fit start
+    batch_summary: 0  # N > 0: print the first train batch (keys, shapes, ranges) and its first N windows
   logging:
     save_top_k_ckpts: 5
     # batches between image collections of log_images_num_samples windows from consecutive rank-0 batches:
