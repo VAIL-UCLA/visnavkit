@@ -9,8 +9,9 @@ defaults:
 exp_name: flowpilot_dst_clips1k
 
 model:
-  dim: 256  # token / temporal / DiT width (tiny: 512): 23.1M total, 14.8M trainable
+  dim: 256  # token / temporal / DiT width (tiny: 512): 23.3M total, 15.0M trainable
   embodiment_token: false  # one corpus: the embodiment token carries nothing
+  temporal_reg_weight: 0.2  # aux single-mode plan on the temporal feature (the reference's anchor-free branch: 0.2)
   goal_mask_p: 0.5  # training: the learned empty-goal token w.p. 0.5 per window (the model default, pinned here)
   temporal:
     num_layers: 2  # causal self-attention over the slots

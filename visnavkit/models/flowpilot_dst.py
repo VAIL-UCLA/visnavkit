@@ -19,6 +19,8 @@ Trains on ``dataset=pose`` windows with frames: ``vision`` (B, T, 3, H, W) in [0
    [distance / 100, cos, sin]; w.p. ``goal_mask_p`` per window in training, and whenever no goal is given,
    it is the learned empty-goal token.
    ``context.num_layers`` self-attention layers then mix one frame's tokens (0: none, older checkpoints).
+   Aux (``temporal_reg_weight`` > 0): an MLP regresses one plan from each frame's temporal feature, MSE on the
+   normalised per-step state as the head's ``norm``; training only, not in ``deploy``.
 5. ``AnchorFlowHead`` (the reference AnchorFlowPlanner): K anchors of normalised per-step dx, dy; queries
    x_t^k = (1 - t) eps + t anchor_k -> mode tokens (+ the anchor's embedding + the ego [v, w] embedding);
    ``num_layers`` x [adaLN(t) cross-attention to the kv tokens -> FF], no self-attention between modes;
@@ -37,6 +39,7 @@ import torch.nn.functional as F
 from visnavkit.models.action.anchor_flow import AnchorFlowHead
 from visnavkit.models.layers.embeddings import sincos_2d
 from visnavkit.models.layers.masking import masked_rows
+from visnavkit.models.layers.mlp import build_mlp
 from visnavkit.models.modality.route_vae import RouteEncoder
 from visnavkit.models.outputs import BaseOutput, PlanOutput
 from visnavkit.models.temporal.fusion import TemporalFusion
@@ -87,6 +90,7 @@ class DSTOutput(BaseOutput):
     plan: DSTPlan
     speed: torch.Tensor  # (B T, 1)
     pair_mask: torch.Tensor  # (B T,) frames whose pair is whole: the speed head's supervision
+    temporal_plan: torch.Tensor | None = None  # (N, T, 5) the temporal feature's single-mode plan (temporal_reg_weight)
 
 
 class FlowPilotDST(nn.Module):
@@ -111,6 +115,7 @@ class FlowPilotDST(nn.Module):
         frame_encoder=None,
         input_norm=False,
         context=None,
+        temporal_reg_weight=0.0,
     ):
         super().__init__()
         self.pair_encoder = (  # frame_encoder: a module with PairEncoder's interface, e.g. DuneEncoder
@@ -140,6 +145,9 @@ class FlowPilotDST(nn.Module):
         )
         self.action_decoder = AnchorFlowHead(dim, **dict(head or {}))
         self.num_embodiments, self.goal_mask_p, self.speed_weight = num_embodiments, goal_mask_p, speed_weight
+        self.temporal_reg_weight = temporal_reg_weight  # aux: one plan regressed from the temporal feature, 0 = off
+        num_pts = self.action_decoder.num_pts
+        self.temporal_reg = build_mlp(dim, dim, num_pts * 5, layers=1) if temporal_reg_weight else None
 
     def encode(
         self,
@@ -153,7 +161,8 @@ class FlowPilotDST(nn.Module):
         action_bounds=None,
     ):
         """The stages 1-4 of the module docstring -> the kv tokens ``(N, L, D)`` of the frames that hold a frame,
-        their ego ``(N, 2)``, bounds ``(N, 2, 5)``, flat indices ``idx`` ``(N,)``, speed ``(B, T, 1)``, pair mask."""
+        their ego ``(N, 2)``, bounds ``(N, 2, 5)``, flat indices ``idx`` ``(N,)``, speed ``(B, T, 1)``, pair mask, frame
+        mask and their temporal features ``(N, D)``."""
         b, t = vision.shape[:2]
         device = vision.device
         if ego is None or action_bounds is None:
@@ -194,7 +203,7 @@ class FlowPilotDST(nn.Module):
         for layer in self.context:
             kv = layer(kv)
         ego_vw, bounds = rows(ego)[:, :2].float(), action_bounds.repeat_interleave(t, 0)[idx].float()
-        return kv, ego_vw, bounds, idx, speed, pair_mask, frame_mask
+        return kv, ego_vw, bounds, idx, speed, pair_mask, frame_mask, feats["temporal"]
 
     def temporal_inputs(self, glob, route):
         """``(B, T, C)``, ``(B, T, R)`` -> the temporal stage's input [global | route]; with ``input_norm`` each is
@@ -215,7 +224,7 @@ class FlowPilotDST(nn.Module):
         action_bounds=None,
     ) -> DSTOutput:
         b, t = vision.shape[:2]
-        kv, ego_vw, bounds, idx, speed, pair_mask, frame_mask = self.encode(
+        kv, ego_vw, bounds, idx, speed, pair_mask, frame_mask, temporal = self.encode(
             vision, goal, frame_mask, route_patch, route_mask, ego, embodiment_id, action_bounds
         )
         plans = torch.zeros(b * t, self.action_decoder.flat_size, device=vision.device)
@@ -225,7 +234,10 @@ class FlowPilotDST(nn.Module):
         plan = DSTPlan(
             plans=plans, logits=logits, tokens=kv, valid=frame_mask.reshape(-1), idx=idx, ego_vw=ego_vw, bounds=bounds
         )
-        return DSTOutput(plan=plan, speed=speed.reshape(b * t, 1), pair_mask=pair_mask.reshape(-1))
+        temporal_plan = None if self.temporal_reg is None else self.temporal_reg(temporal).view(len(idx), -1, 5)
+        return DSTOutput(
+            plan=plan, speed=speed.reshape(b * t, 1), pair_mask=pair_mask.reshape(-1), temporal_plan=temporal_plan
+        )
 
     @torch.no_grad()
     def current_modes(self, plan: DSTPlan, seq_len, k=6):
@@ -242,7 +254,7 @@ class FlowPilotDST(nn.Module):
         No embodiment input: a recipe that keeps the embodiment token gets its unknown-embodiment row."""
         b, t = vision.shape[:2]
         full = torch.ones(b, t, dtype=torch.bool, device=vision.device)
-        kv, ego_vw, bounds, _, speed, _, _ = self.encode(
+        kv, ego_vw, bounds, _, speed, _, _, _ = self.encode(
             vision, goal, full, route_patch, full, ego, None, action_bounds
         )
         rows = torch.arange(b, device=vision.device) * t + (t - 1)  # each window's current frame
@@ -282,4 +294,9 @@ class FlowPilotDST(nn.Module):
             action_state=head["state"].detach(),
             vision_speed=speed.detach(),
         )
+        if preds.temporal_plan is not None:  # aux: the normalised per-step state [dx, dy, dyaw, v, w], as the head's
+            target = self.action_decoder.norm(actions, plan.bounds)
+            reg = F.mse_loss(preds.temporal_plan.float(), target, reduction="none").sum(-1).mean()
+            loss_dict["loss"] = loss_dict["loss"] + self.temporal_reg_weight * reg
+            loss_dict["temporal_reg"] = reg.detach()
         return loss_dict, {}

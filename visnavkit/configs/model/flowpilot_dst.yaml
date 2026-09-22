@@ -17,6 +17,7 @@ embodiment_token: true  # false: no embodiment token (one corpus, e.g. clips1k)
 goal_mask_p: 0.5  # training: the goal token is the learned empty-goal token w.p. 0.5 per window
 input_norm: true  # global and route each Linear -> LayerNorm to dim before the temporal concat (false: older checkpoints)
 speed_weight: 1.0  # speed head, on whole pairs only: corpora below the slot rate (5 fps = 1 slot in 4) never supervise it
+temporal_reg_weight: 0.0  # aux: single-mode plan regressed from the temporal feature (the recipe turns it on)
 temporal:
   num_layers: 2
   num_heads: 8

@@ -11,7 +11,7 @@ defaults:
 exp_name: flowpilot_dune_dst_clips1k
 
 model:
-  dim: 1024  # token / temporal / context / DiT width (flowpilot_dst_clips1k: 256): 206.7M total, 112.1M trainable (DUNE ViT and route VAE frozen)
+  dim: 1024  # token / temporal / context / DiT width (flowpilot_dst_clips1k: 256): 208.2M total, 113.6M trainable (DUNE ViT and route VAE frozen)
   temporal:
     num_layers: 2
   context:
