@@ -1,0 +1,41 @@
+# @package _global_
+# Sanity check on real data: overfit a few fixed clips1k batches on one GPU, forward + backward every step.
+# Every train-time randomness the model owns is off, so action_cls and action_state should fall to ~0; the flow
+# velocity keeps the noise / time draw and falls more slowly. Same asset overrides as the full run:
+#   uv run visnavkit-train experiment=flowpilot_dst_overfit model.route.weights=<route VAE> model.head.anchors_path=<kmeans64.npy>
+# DUNE: add model=flowpilot_dune_dst model.dim=512 model.frame_encoder.weights=<DUNE ckpt>
+defaults:
+  - flowpilot_dst_clips1k
+  - _self_
+
+exp_name: flowpilot_dst_overfit
+augs: null  # the same pixels every step
+
+model:
+  p_drop_prev: 0.0
+  goal_mask_p: 0.0
+  temporal:
+    dropout: 0.0
+    mask_p: 0.0
+  head:
+    dropout: 0.0
+    ego_mask_p: 0.0
+
+dataset:
+  batch_size: 8
+  num_workers: 4
+
+trainer:
+  kwargs:
+    devices: 1
+    overfit_batches: 4  # the first 4 train batches (shuffle off) and the first 4 val batches
+    max_epochs: 100  # = 400 steps
+    check_val_every_n_epoch: 25
+    num_sanity_val_steps: 0
+    log_every_n_steps: 4
+  logging:
+    save_top_k_ckpts: 0
+    # train is null: batch_idx restarts every 4-batch epoch, so any N would log every epoch; val panels at each
+    # validation, in <log_dir>/images/val_step<N>/ (route patch + plan vs GT)
+    log_images_every_n_batches: { train: null, val: 1 }
+    log_images_num_samples: 8

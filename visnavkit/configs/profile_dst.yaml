@@ -1,0 +1,14 @@
+defaults:
+  - train
+  - override experiment: flowpilot_dst_clips1k  # untrained runs; a checkpoint brings its own config
+  - _self_
+
+checkpoint: null  # null: untrained (random head, pretrained backbone)
+device: cuda
+warmup: 10
+iters: 50
+euler_steps: [1, 2, 4, 8]  # decode step counts to time and compare against the recipe's sample_steps
+
+hydra:
+  job:
+    chdir: false
