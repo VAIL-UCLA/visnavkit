@@ -239,7 +239,7 @@ def test_dune_frame_encoder_is_frozen_and_pools_single_frames():
 
     if not os.path.isdir(os.path.join(torch.hub.get_dir(), "naver_dune_main")):
         pytest.skip("naver/dune is not in the torch.hub cache")
-    from visnavkit.models.dune_encoder import DuneEncoder
+    from visnavkit.models.vision.dune import DuneEncoder
 
     encoder = DuneEncoder(downscale=4).train()
     frames, mask = torch.rand(1, 2, 3, 216, 384), torch.tensor([[True, False]])

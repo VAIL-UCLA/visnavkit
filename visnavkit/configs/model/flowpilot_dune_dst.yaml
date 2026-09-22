@@ -1,4 +1,4 @@
-# FlowPilot-DUNE-DST: flowpilot_dst with the frame encoder swapped for a frozen DUNE ViT-B/14 (visnavkit.models.dune_encoder):
+# FlowPilot-DUNE-DST: flowpilot_dst with the frame encoder swapped for a frozen DUNE ViT-B/14 (visnavkit.models.vision.dune):
 # one frame per slot, global = the mean of its patch tokens, patches avg-pooled x4 (216 x 384 -> 16 x 28 -> 4 x 7 = 28
 # tokens), no CLS, + a trainable identity-init Linear(768, 768) adapter. No speed head (a single frame has no motion).
 # Everything downstream (route VAE, temporal fusion, kv tokens, anchored flow DiT) is flowpilot_dst's.
@@ -7,7 +7,7 @@ defaults:
   - _self_
 
 frame_encoder:
-  _target_: visnavkit.models.dune_encoder.DuneEncoder
+  _target_: visnavkit.models.vision.dune.DuneEncoder
   weights: null  # a reference UnifiedModel ckpt (model.encoder.vision.encoder.*) or that encoder's state dict; null = torch.hub DUNE
   downscale: 4  # patch grid pooling: 16 x 28 -> 4 x 7
   hub_name: dune_vitbase_14_448_encoder
