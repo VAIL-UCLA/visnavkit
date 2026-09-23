@@ -63,6 +63,7 @@ class DuneEncoder(nn.Module):
             grid = tokens.float().transpose(1, 2).reshape(len(idx), self.dim, gh, gw)
             pooled = F.avg_pool2d(grid, d) if d > 1 else grid
             glob[idx] = self.adapt(grid.mean((2, 3))).to(glob.dtype)
-            patches[idx] = self.adapt(pooled.movedim(1, -1)).movedim(-1, 1).to(patches.dtype)
+            # explicit perms: movedim(-1, 1) traces to a negative Transpose perm ONNX Runtime rejects
+            patches[idx] = self.adapt(pooled.permute(0, 2, 3, 1)).permute(0, 3, 1, 2).to(patches.dtype)
         speed = frames.new_zeros(b, t, 1)
         return glob.view(b, t, -1), patches.view(b, t, self.dim, gh // d, gw // d), speed, torch.zeros_like(frame_mask)
