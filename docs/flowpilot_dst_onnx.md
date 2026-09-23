@@ -88,8 +88,8 @@ For a pinhole camera (`cam_type` 0) drop the `s` factor.
   that needs a streaming graph, which this export does not provide.
 - **On a real clips1k validation window** the graph matched PyTorch to 3.0e-6, and the top plan's
   ADE against the ground truth was 0.45 m over 4 s (the epoch-5 checkpoint).
-- **TensorRT:** `uv run visnavkit-build-engine onnx=flowpilot_dst.onnx precision=fp16` (fixed shapes, no
-  profile needed; `bf16` too), then `uv run visnavkit-check-export checkpoint=<ckpt> onnx=flowpilot_dst.onnx
+- **TensorRT:** `uv run visnavkit-build-engine onnx=flowpilot_dst.onnx` (fixed shapes, no profile needed; the
+  engine takes the graph's precision, so export with `precision=fp16` for an fp16 engine), then `uv run visnavkit-check-export checkpoint=<ckpt> onnx=flowpilot_dst.onnx
   engine=flowpilot_dst.fp16.engine` replays the traced window through every artifact and prints the per-output
   errors, the top plan's endpoint delta, hashes and latency.
 - **A wrong `action_bounds` row silently rescales every output**, since the plan is decoded from

@@ -1,7 +1,7 @@
 """Run the deployment path end to end on random weights: checkpoint -> ONNX -> TensorRT engine -> check.
 
-    uv run visnavkit-export-smoke model=gnm                              # fp32 ONNX, fp16 engine, CPU check
-    uv run visnavkit-export-smoke model=gnm --precision fp16 --engine-precision bf16 --device cuda
+    uv run visnavkit-export-smoke model=gnm                              # fp32 ONNX, fp32 engine, CPU reference
+    uv run visnavkit-export-smoke model=gnm --precision fp16              # fp16 ONNX and engine
     uv run visnavkit-export-smoke experiment=flowpilot_dst_clips1k --no-engine
 
 Positional arguments are Hydra overrides on the export config. Parity is reported, not enforced: random weights
@@ -25,7 +25,9 @@ def main(argv=None):
     parser.add_argument("overrides", nargs="*", help="Hydra overrides, e.g. model=gnm model/action_decoder=mhp")
     parser.add_argument("--output-dir", type=Path, default=Path("outputs/export_smoke"))
     parser.add_argument("--precision", choices=ONNX_PRECISIONS, default="fp32", help="ONNX weight dtype")
-    parser.add_argument("--engine-precision", choices=ENGINE_PRECISIONS, default="fp16")
+    parser.add_argument(
+        "--engine-precision", choices=ENGINE_PRECISIONS, default=None, help="Default: the ONNX precision (TensorRT 11)"
+    )
     parser.add_argument("--no-engine", action="store_true", help="Skip the TensorRT build")
     parser.add_argument("--batch-size", type=int, default=1)
     parser.add_argument("--iterations", type=int, default=10, help="Latency samples per backend; 0 skips timing")

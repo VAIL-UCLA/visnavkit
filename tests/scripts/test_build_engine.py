@@ -1,7 +1,6 @@
-"""TensorRT engine build and check against the .pth and ONNX references; skipped without tensorrt and a GPU."""
+"""TensorRT engine build and check against the .pth and ONNX references; skipped without tensorrt."""
 
 import pytest
-import torch
 from hydra import compose, initialize_config_module
 
 pytest.importorskip("tensorrt")
@@ -23,10 +22,8 @@ SMALL = [
 ]
 
 
-@pytest.mark.parametrize("precision", ["fp32", "fp16", "bf16"])
+@pytest.mark.parametrize("precision", ["fp32", "fp16"])
 def test_engine_matches_the_pytorch_reference(tmp_path, precision):
-    if not torch.cuda.is_available():
-        pytest.skip("needs a GPU")
     from visnavkit.export.check import check_export
     from visnavkit.export.policy import export_policy
     from visnavkit.export.trt import build_engine
@@ -35,9 +32,9 @@ def test_engine_matches_the_pytorch_reference(tmp_path, precision):
     with initialize_config_module(version_base=None, config_module="visnavkit.configs"):
         cfg = compose(config_name="export", overrides=SMALL)
     path = tmp_path / "policy.onnx"
-    export_policy(cfg, path, precision="fp32")
+    export_policy(cfg, path, precision=precision)  # strongly typed builders take the graph's precision
     engine = tmp_path / f"policy.{precision}.engine"
-    meta = build_engine(path, engine, precision=precision, workspace_gb=1)
+    meta = build_engine(path, engine, workspace_gb=1)
     print_engine_summary(meta)
     assert meta["precision"] == precision and meta["dynamic_inputs"] == ["vision", "feature_buffer"]
     assert {spec["dtype"] for spec in meta["io"].values()} == {"float"}

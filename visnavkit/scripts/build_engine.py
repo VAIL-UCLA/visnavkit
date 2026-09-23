@@ -1,19 +1,21 @@
 """Build a TensorRT engine from an exported ONNX graph and write ``<engine>.metadata.json`` beside it.
 
-    uv run visnavkit-build-engine onnx=outputs/policy.onnx precision=fp16       # -> outputs/policy.fp16.engine
-    uv run visnavkit-build-engine onnx=flowpilot_dst.onnx precision=bf16 workspace_gb=8
+    uv run visnavkit-build-engine onnx=outputs/policy.onnx                 # -> outputs/policy.<graph precision>.engine
+    uv run visnavkit-build-engine onnx=flowpilot_dst.onnx workspace_gb=8
 
-Needs ``tensorrt`` (``uv pip install tensorrt``, or ``tensorrt-cu13`` on a CUDA 13 stack) and the GPU the engine
-will run on. Build from the fp32 export: the builder keeps the graph's fp32 io and picks fp16 / bf16 kernels itself.
-``batch=[min,opt,max]`` sizes the dynamic batch axis of ``visnavkit-export`` graphs. Compare the engine with the
-checkpoint and the ONNX graph through ``visnavkit-check-export``.
+Needs ``tensorrt`` (``uv pip install tensorrt-cu12`` or ``tensorrt-cu13``, matching the driver's CUDA) and the GPU
+the engine will run on. The engine computes at the graph's stored precision (TensorRT 11 is strongly typed): export
+with ``precision=fp16`` for an fp16 engine. ``batch=[min,opt,max]`` sizes the dynamic batch axis of
+``visnavkit-export`` graphs. Compare the engine with the checkpoint and the graph through ``visnavkit-check-export``.
 """
 
 from pathlib import Path
 
 import hydra
+import onnx
 from omegaconf import DictConfig
 
+from visnavkit.export.precision import onnx_precision
 from visnavkit.export.trt import build_engine
 
 
@@ -21,7 +23,9 @@ def print_engine_summary(meta):
     print("=" * 40 + " TENSORRT ENGINE " + "=" * 40)
     print(f"source : {meta['onnx']} (sha256 {meta['onnx_sha256'][:12]})")
     print(
-        f"engine : {meta['engine_bytes'] / 2**20:.1f}MB, {meta['precision']} (flags {meta['builder_flags'] or 'none'}),"
+        f"engine : {meta['engine_bytes'] / 2**20:.1f}MB, {meta['precision']}"
+        f" ({'strongly typed' if meta['strongly_typed'] else 'flags ' + str(meta['builder_flags'])}"
+        f"{', tf32' if meta['tf32'] else ''}),"
         f" TensorRT {meta['tensorrt']}, {meta['gpu'] or 'GPU unknown to torch'}, {meta['num_layers']} layers,"
         f" built in {meta['build_seconds']}s"
     )
@@ -33,11 +37,13 @@ def print_engine_summary(meta):
 
 @hydra.main(version_base=None, config_path="../configs", config_name="build_engine")
 def main(cfg: DictConfig):
-    output = cfg.output or Path(cfg.onnx).with_suffix(f".{cfg.precision}.engine")
+    precision = cfg.precision or onnx_precision(onnx.load(str(cfg.onnx), load_external_data=False))[0]
+    output = cfg.output or Path(cfg.onnx).with_suffix(f".{precision}.engine")
     meta = build_engine(
         cfg.onnx,
         output,
-        precision=cfg.precision,
+        precision=precision,
+        tf32=cfg.tf32,
         workspace_gb=cfg.workspace_gb,
         batch=tuple(int(size) for size in cfg.batch),
         verbose=cfg.verbose,

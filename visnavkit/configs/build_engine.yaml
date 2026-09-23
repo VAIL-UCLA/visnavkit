@@ -1,6 +1,7 @@
-onnx: ???  # the exported graph; build from the fp32 export, the builder casts what it can
+onnx: ???  # the exported graph; its stored precision becomes the engine's (TensorRT 11 is strongly typed)
 output: null  # null: <onnx stem>.<precision>.engine
-precision: fp16  # fp32 | fp16 | bf16 (fp32 keeps TensorRT's TF32 default); io stays as in the graph
+precision: null  # fp32 | fp16 | bf16; null: the graph's. TensorRT 10 can still cast an fp32 graph with a builder flag
+tf32: false  # fp32 engines: true fp32; true lets matmuls / convolutions round to 10 mantissa bits on tensor cores
 workspace_gb: 4
 batch: [1, 1, 1]  # [min, opt, max] for the dynamic batch axis of visnavkit-export graphs; ignored for fixed shapes
 verbose: false  # TensorRT builder log at INFO

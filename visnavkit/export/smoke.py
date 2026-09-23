@@ -29,7 +29,7 @@ def export_smoke(
     output_dir,
     *,
     precision="fp32",
-    engine_precision="fp16",
+    engine_precision=None,
     engine=True,
     batch_size=1,
     iterations=10,
@@ -65,7 +65,7 @@ def export_smoke(
             from visnavkit.export.trt import build_engine
             from visnavkit.scripts.build_engine import print_engine_summary
 
-            engine_path = output_dir / f"{name}.{engine_precision}.engine"
+            engine_path = output_dir / f"{name}.{engine_precision or precision}.engine"
             batch = (batch_size,) * 3
             meta_engine = build_engine(
                 onnx_path, engine_path, precision=engine_precision, workspace_gb=workspace_gb, batch=batch

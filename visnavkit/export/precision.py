@@ -11,8 +11,9 @@ import torch
 
 ONNX_PRECISIONS = ("fp32", "fp16")
 ENGINE_PRECISIONS = ("fp32", "fp16", "bf16")
-# (rtol, atol) against the fp32 PyTorch reference: fp16 keeps ~3 significant digits, bf16 ~2.
-TOLERANCES = {"fp32": (2e-3, 2e-4), "fp16": (1e-2, 2e-3), "bf16": (2e-2, 1e-2)}
+# (rtol, atol) against the fp32 PyTorch reference: fp16 keeps ~3 significant digits, bf16 ~2; tf32 is an fp32
+# engine whose matmuls / convolutions round to 10 mantissa bits (TensorRT's default), so it is held to fp16.
+TOLERANCES = {"fp32": (2e-3, 2e-4), "tf32": (1e-2, 2e-3), "fp16": (1e-2, 2e-3), "bf16": (2e-2, 1e-2)}
 _ONNX_FLOATS = {"FLOAT": "fp32", "FLOAT16": "fp16", "BFLOAT16": "bf16"}
 _TORCH_FLOATS = {torch.float32: "fp32", torch.float16: "fp16", torch.bfloat16: "bf16"}
 

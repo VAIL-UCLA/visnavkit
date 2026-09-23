@@ -7,7 +7,7 @@ description: Export a visnavkit checkpoint to ONNX and debug export failures. Us
 
 ```bash
 uv run visnavkit-export checkpoint=<ckpt> output=<out.onnx> precision=fp32|fp16  # checkpoint=null: untrained pipeline check (parity reported, not enforced)
-uv run visnavkit-build-engine onnx=<out.onnx> precision=fp32|fp16|bf16          # TensorRT engine + metadata (uv pip install tensorrt); build from the fp32 graph
+uv run visnavkit-build-engine onnx=<out.onnx>                # TensorRT engine at the graph's precision + metadata (uv pip install --python .venv tensorrt-cu12, matching the driver's CUDA)
 uv run visnavkit-check-export checkpoint=<ckpt> pth=<out.pth> onnx=<out.onnx> engine=<engine>  # the traced inputs through every artifact
 uv run visnavkit-export-smoke <overrides> [--precision fp16 --engine-precision bf16 --no-engine]  # random weights through the whole path
 ```
@@ -23,5 +23,5 @@ uv run visnavkit-export-smoke <overrides> [--precision fp16 --engine-precision b
 - Shape mismatch at parity: `feature_idxs` gathering in `NavigationPolicy.predict` must match the buffer layout (newest last, width `K * feat_size`).
 - Goal/noise missing in the graph: check `policy.export_input_names()`; None inputs are dropped by design.
 - fp16 NaNs: rerun with `precision=fp32` to isolate; a `bf16` engine tolerates 2e-2 rel, check the endpoint delta.
-- Engine build: only the batch axis may be dynamic (`batch=[min,opt,max]`); an engine runs only on the GPU / TensorRT version that built it.
+- Engine build: TensorRT 11 is strongly typed, so an fp16 engine needs an fp16 export (TensorRT 10 can still cast with `precision=`); only the batch axis may be dynamic (`batch=[min,opt,max]`); an engine runs only on the GPU / TensorRT version that built it.
 - Paste the EXPORT + SANITY CHECK blocks and the EXPORT CHECK table in the PR/report.

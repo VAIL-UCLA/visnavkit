@@ -115,7 +115,7 @@ modality inputs carry no frame axis. `export/policy.py` traces it with presence-
 `vision`, `feature_buffer`, one `goal` per goal encoder, one per modality key, `noise` — and
 verifies ONNX Runtime parity; `precision` (`fp32` | `fp16`) sets the stored weight dtype, io stays
 fp32, and `.pth` (weights + config), `.metadata.json` and `.inputs.npz` land beside the graph.
-`export/trt.py` builds a TensorRT engine (`fp32` | `fp16` | `bf16`) from the fp32 graph;
+`export/trt.py` builds a TensorRT engine at the graph's precision (TensorRT 11 is strongly typed);
 `export/check.py` replays the traced inputs through checkpoint, `.pth`, ONNX Runtime and
 engine at each precision's tolerance. `benchmark/export.py` traces the full window with fixed shapes and
 outputs `trajectories`, `scores` (plus `speed`) for latency and open-loop measurements. FlowPilot-DST

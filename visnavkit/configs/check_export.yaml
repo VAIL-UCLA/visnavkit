@@ -1,14 +1,14 @@
 checkpoint: null  # Lightning .ckpt: the fp32 PyTorch reference; its config rebuilds the traced graph
 pth: null  # exporter .pth (weights + config): the reference when checkpoint is null, else compared with it
 onnx: null  # ONNX graph, run with ONNX Runtime
-engine: null  # TensorRT engine, run through PyTorch CUDA buffers (needs tensorrt and the GPU it was built on)
+engine: null  # TensorRT engine (needs tensorrt and the GPU it was built on; runs through libcudart, no torch CUDA)
 inputs: null  # .npz feeds; default: <onnx>.inputs.npz when it exists, else synthetic from the reference
 seed: 0
 batch_size: 1  # synthetic inputs only
 top_k: null  # FlowPilot-DST plans per call; default: the ONNX metadata's, else 6
 device: cpu  # PyTorch reference device
 provider: CPUExecutionProvider  # ONNX Runtime execution provider (CUDAExecutionProvider needs onnxruntime-gpu)
-atol: null  # override the per-precision tolerance: fp32 2e-4 / 2e-3, fp16 2e-3 / 1e-2, bf16 1e-2 / 2e-2 (atol / rtol)
+atol: null  # override the per-precision tolerance (atol / rtol): fp32 2e-4 / 2e-3, tf32 and fp16 2e-3 / 1e-2, bf16 1e-2 / 2e-2
 rtol: null
 iterations: 10  # latency samples per backend after 2 warmups; 0 skips timing
 

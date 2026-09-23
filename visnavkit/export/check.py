@@ -169,6 +169,8 @@ def check_export(
         if precision is None:
             logger.warning(f"{engine} has no metadata; checking it at the fp16 tolerance")
             precision = "fp16"
+        elif precision == "fp32" and engine_meta.get("tf32"):
+            precision = "tf32"  # TensorRT's fp32 default rounds matmuls to 10 mantissa bits
         backend = (engine_meta or {}).get("gpu") or "TensorRT"
         artifacts.append(("engine", engine, precision, _engine_runner(engine, output_names), backend))
 

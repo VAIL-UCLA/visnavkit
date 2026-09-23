@@ -161,9 +161,10 @@ def finalize_export(
     strict=None,
 ):
     """Cast the traced graph to ``precision`` and save it, check ONNX Runtime parity at that precision's
-    tolerance (``strict``, default: enforced for checkpoint weights, reported for untrained ones), write ``.inputs.npz``, ``.pth`` and
-    ``.metadata.json`` beside it and print the summary. Returns the metadata; ``decision(model, outputs)`` is
-    the family's ``(label, endpoint, lines)`` of the newest decision, ``extra`` its metadata keys."""
+    tolerance (``strict``, default: enforced for checkpoint weights, reported for untrained ones), write
+    ``.inputs.npz``, ``.pth`` and ``.metadata.json`` beside it and print the summary. Returns the metadata;
+    ``decision(model, outputs)`` is the family's ``(label, endpoint, lines)`` of the newest decision, ``extra``
+    its metadata keys."""
     output = Path(output)
     if precision != "fp32":
         logger.info(f"Casting weights to {precision} (io stays fp32)...")
