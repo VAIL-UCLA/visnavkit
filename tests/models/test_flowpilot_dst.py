@@ -249,3 +249,20 @@ def test_dune_frame_encoder_is_frozen_and_pools_single_frames():
     assert (glob[0, 1] == 0).all() and not pair.any() and (speed == 0).all()
     glob.sum().backward()
     assert encoder.adapt.weight.grad is not None
+
+
+def test_window_export_matches_onnx_runtime_and_the_check_replays_it(tmp_path):
+    """The traced window graph: fp32 parity, the .pth / metadata / inputs sidecars, and the check on all of them."""
+    from visnavkit.scripts.check_export import check_export
+    from visnavkit.scripts.export_dst import export_dst
+
+    torch.set_num_threads(1)
+    with initialize_config_module(version_base=None, config_module="visnavkit.configs"):
+        cfg = compose(config_name="train", overrides=[*SMALL, "common.crop_wh=[64,32]", "common.downscale_factor=1"])
+    disable_pretrained_downloads(cfg.model)
+    path = tmp_path / "flowpilot_dst.onnx"
+    meta = export_dst(cfg, path, top_k=3, precision="fp32")
+    assert meta["output_shapes"] == {"modes": [1, 3, 8, 5], "probs": [1, 3], "speed": [1, 1]}
+    assert meta["input_shapes"]["route_patch"] == [1, 4, 80, 80] and meta["top_k"] == 3
+    report = check_export(pth=str(path.with_suffix(".pth")), onnx_path=str(path), iterations=0)
+    assert report["ok"] and report["artifacts"]["onnx"]["outputs"]["modes"]["pass"], report

@@ -3,9 +3,9 @@ defaults:
   - _self_
 
 checkpoint: null  # null: export with untrained weights (pipeline check; parity reported, not enforced)
-output: visnavkit.onnx
+output: visnavkit.onnx  # + <output>.pth, .metadata.json and .inputs.npz beside it
 onnx_opset_version: 14
-half: true
+precision: fp16  # fp32 | fp16: the stored weight dtype, io stays fp32; export fp32 as the TensorRT source graph
 export_heads: []
 
 hydra:

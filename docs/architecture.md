@@ -113,7 +113,11 @@ per frame under `reduction=none`; both share `encode_window`.
 encodes one frame and reuses buffered past tokens `(B, history, K * D)`; the newest frame's
 modality inputs carry no frame axis. `scripts/export.py` traces it with presence-driven inputs —
 `vision`, `feature_buffer`, one `goal` per goal encoder, one per modality key, `noise` — and
-verifies ONNX Runtime parity. `benchmark/export.py` traces the full window with fixed shapes and
+verifies ONNX Runtime parity; `precision` (`fp32` | `fp16`) sets the stored weight dtype, io stays
+fp32, and `.pth` (weights + config), `.metadata.json` and `.inputs.npz` land beside the graph.
+`scripts/build_engine.py` builds a TensorRT engine (`fp32` | `fp16` | `bf16`) from the fp32 graph;
+`scripts/check_export.py` replays the traced inputs through checkpoint, `.pth`, ONNX Runtime and
+engine at each precision's tolerance. `benchmark/export.py` traces the full window with fixed shapes and
 outputs `trajectories`, `scores` (plus `speed`) for latency and open-loop measurements. FlowPilot-DST
 stands outside that family (no `vision_encoder` / feature buffer): `scripts/export_dst.py` traces
 `FlowPilotDST.deploy` — the window in, the current frame's top-k plans out — and

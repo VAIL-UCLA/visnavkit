@@ -220,7 +220,7 @@ def main(argv=None):
         from visnavkit.scripts.export import export_policy
 
         model_path = args.output_dir / "model.onnx"
-        parity = export_policy(cfg, model_path, half=False, checkpoint=None, batch_size=batch)
+        parity = export_policy(cfg, model_path, precision="fp32", checkpoint=None, batch_size=batch)
         errors = ", ".join(f"{name}={value:.3g}" for name, value in parity.items())
         print(f"[PASS] ONNX Runtime parity (maximum absolute errors: {errors})")
         print(f"ONNX: {model_path}")
