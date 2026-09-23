@@ -16,7 +16,13 @@ import torch.nn as nn
 from omegaconf import OmegaConf, open_dict
 from torch.nn.utils.fusion import fuse_linear_bn_eval
 
-from visnavkit.export.artifacts import finalize_export, instantiate_model, load_model, mha_fastpath_disabled
+from visnavkit.export.artifacts import (
+    default_device,
+    finalize_export,
+    instantiate_model,
+    load_model,
+    mha_fastpath_disabled,
+)
 from visnavkit.export.precision import ONNX_PRECISIONS, check_precision
 from visnavkit.models.action.outputs import parse_plan_output as parse_tensor_plan_output
 from visnavkit.utils.logger import get_logger
@@ -93,7 +99,7 @@ def prepare_graph(model, cfg, *, batch_size=1, seed=0, export_heads=(), device=N
         # Training predicts per frame; deployment wants the newest frame's decision only.
         infer_model.temporal_encoder.reduction = "last"
     infer_model.export_heads = [name for name in export_heads if name in infer_model.vision_encoder.heads]
-    device = torch.device(device or ("cuda" if torch.cuda.is_available() else "cpu"))
+    device = torch.device(device) if device else default_device()
     infer_model = infer_model.to(device)
     img_w = int(cfg.common.crop_wh[0] // cfg.common.downscale_factor)
     img_h = int(cfg.common.crop_wh[1] // cfg.common.downscale_factor)
@@ -130,10 +136,23 @@ def load_policy(cfg):
     return model, OmegaConf.merge(OmegaConf.to_container(saved, resolve=True), options)
 
 
-def export_policy(cfg, output, *, precision=None, checkpoint=..., batch_size=1, opset=None, export_heads=None, seed=0):
+def export_policy(
+    cfg,
+    output,
+    *,
+    precision=None,
+    checkpoint=...,
+    batch_size=1,
+    opset=None,
+    export_heads=None,
+    seed=0,
+    strict=None,
+    device=None,
+):
     """Trace, slim, cast to ``precision``, verify parity and write the sidecars; returns the metadata.
 
-    Keyword arguments override the export options of ``cfg`` (``export.yaml`` on top of a train config).
+    Keyword arguments override the export options of ``cfg`` (``export.yaml`` on top of a train config);
+    ``device`` is where the reference runs (default: CUDA when usable).
     """
     cfg = copy.deepcopy(cfg)
     with open_dict(cfg):
@@ -156,7 +175,7 @@ def export_policy(cfg, output, *, precision=None, checkpoint=..., batch_size=1, 
     output = Path(output)
     output.parent.mkdir(parents=True, exist_ok=True)
     wrapper, inputs, input_names, output_names = prepare_graph(
-        model, cfg, batch_size=batch_size, seed=seed, export_heads=list(cfg.export_heads)
+        model, cfg, batch_size=batch_size, seed=seed, export_heads=list(cfg.export_heads), device=device
     )
     logger.info("Export inputs: " + ", ".join(f"{name}{tuple(t.shape)}" for name, t in zip(input_names, inputs)))
 
@@ -200,4 +219,5 @@ def export_policy(cfg, output, *, precision=None, checkpoint=..., batch_size=1, 
         opset=opset,
         seed=seed,
         decision=decision,
+        strict=strict,
     )

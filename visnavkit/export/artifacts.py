@@ -71,6 +71,19 @@ def save_pth(path, cfg, model):
 
 
 # ---- runs ------------------------------------------------------------------------------------
+def default_device():
+    """``cuda`` when a tensor can actually be placed there (Lightning patches ``is_available`` to an NVML probe,
+    which says yes even when the driver is too old for this torch build), else ``cpu``."""
+    if torch.cuda.is_available():
+        try:
+            torch.zeros(1, device="cuda")
+            return torch.device("cuda")
+        except RuntimeError as error:
+            reason = str(error).splitlines()[0]
+            logger.warning(f"CUDA reported but unusable, exporting on the CPU: {reason}")
+    return torch.device("cpu")
+
+
 @contextmanager
 def mha_fastpath_disabled():
     """Trace and compare with the same attention kernels: the MHA fast path is not traceable."""
@@ -83,12 +96,16 @@ def mha_fastpath_disabled():
 
 
 def onnx_session(path, provider="CPUExecutionProvider", optimize=True):
-    """One ONNX Runtime session; ``optimize=False`` runs the graph as stored (parity of the export itself)."""
+    """One ONNX Runtime session; ``optimize=False`` runs the graph as stored (parity of the export itself).
+
+    Optimized sessions stop at the extended level: the hardware layout pass of ``ORT_ENABLE_ALL`` crashed
+    ONNX Runtime 1.28 on fp16 CPU graphs with many threads.
+    """
     if provider not in ort.get_available_providers():
         raise ValueError(f"Requested {provider}; available providers: {ort.get_available_providers()}")
     options = ort.SessionOptions()
     level = ort.GraphOptimizationLevel
-    options.graph_optimization_level = level.ORT_ENABLE_ALL if optimize else level.ORT_DISABLE_ALL
+    options.graph_optimization_level = level.ORT_ENABLE_EXTENDED if optimize else level.ORT_DISABLE_ALL
     options.intra_op_num_threads = torch.get_num_threads()
     session = ort.InferenceSession(str(path), sess_options=options, providers=[provider])
     session.disable_fallback()
@@ -141,9 +158,10 @@ def finalize_export(
     seed,
     decision,
     extra=None,
+    strict=None,
 ):
     """Cast the traced graph to ``precision`` and save it, check ONNX Runtime parity at that precision's
-    tolerance (enforced for checkpoint weights, reported for untrained ones), write ``.inputs.npz``, ``.pth`` and
+    tolerance (``strict``, default: enforced for checkpoint weights, reported for untrained ones), write ``.inputs.npz``, ``.pth`` and
     ``.metadata.json`` beside it and print the summary. Returns the metadata; ``decision(model, outputs)`` is
     the family's ``(label, endpoint, lines)`` of the newest decision, ``extra`` its metadata keys."""
     output = Path(output)
@@ -160,10 +178,10 @@ def finalize_export(
     errors = {name: item["max_abs"] for name, item in report.items()}
     failed = [name for name, item in report.items() if not item["pass"]]
     summary = ", ".join(f"{name}={error:.3g}" for name, error in errors.items())
-    if failed and checkpoint:
+    if failed and (bool(checkpoint) if strict is None else strict):
         raise AssertionError(f"PyTorch/ONNX parity exceeded rtol {rtol}, atol {atol} for {failed}: {summary}")
     if failed:
-        logger.warning(f"Parity tolerance exceeded for {failed} ({summary}); untrained weights, not enforced")
+        logger.warning(f"Parity tolerance exceeded for {failed} ({summary}); not enforced")
     logger.info(f"Nonzero-input PyTorch/ONNX parity ({precision}, rtol {rtol}, atol {atol}): {summary}")
 
     np.savez(output.with_suffix(".inputs.npz"), **feeds)

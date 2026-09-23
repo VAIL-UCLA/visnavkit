@@ -90,7 +90,7 @@ def decision(model, outputs):
     return f"top plan p={probs[0, 0]:.3f}", modes[0, 0, -1, :2].astype(np.float64), lines
 
 
-def export_dst(cfg, output, *, checkpoint=None, batch_size=1, top_k=6, opset=17, seed=0, precision="fp32"):
+def export_dst(cfg, output, *, checkpoint=None, batch_size=1, top_k=6, opset=17, seed=0, precision="fp32", strict=None):
     """Trace the window graph, check ONNX Runtime parity and write the sidecars; returns the metadata."""
     check_precision(precision, ONNX_PRECISIONS)
     model, cfg = load_model(checkpoint, cfg) if checkpoint else (instantiate_model(cfg), cfg)
@@ -128,6 +128,7 @@ def export_dst(cfg, output, *, checkpoint=None, batch_size=1, top_k=6, opset=17,
         opset=opset,
         seed=seed,
         decision=decision,
+        strict=strict,
         extra={
             "pose_fields": ["x_m", "y_m", "yaw_rad", "v_mps", "w_radps"],
             "target_times_s": target_times(cfg).tolist(),

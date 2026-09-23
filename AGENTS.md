@@ -20,6 +20,7 @@ uv run visnavkit-train-route route=vae    # route-patch AE/VAE; model.goal_encod
 uv run visnavkit-export checkpoint=<ckpt> output=outputs/policy.onnx precision=fp32  # fp32 | fp16; + .pth, .metadata.json, .inputs.npz
 uv run visnavkit-build-engine onnx=outputs/policy.onnx precision=fp16      # TensorRT fp32 | fp16 | bf16 (uv pip install tensorrt)
 uv run visnavkit-check-export checkpoint=<ckpt> onnx=outputs/policy.onnx engine=outputs/policy.fp16.engine
+uv run visnavkit-export-smoke model=gnm   # random weights: ckpt -> ONNX -> engine -> check, no data needed
 ```
 
 Everything runs through `uv run`. Training records Git provenance; `strict_git=true` requires a

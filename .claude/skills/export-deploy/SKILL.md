@@ -9,6 +9,7 @@ description: Export a visnavkit checkpoint to ONNX and debug export failures. Us
 uv run visnavkit-export checkpoint=<ckpt> output=<out.onnx> precision=fp32|fp16  # checkpoint=null: untrained pipeline check (parity reported, not enforced)
 uv run visnavkit-build-engine onnx=<out.onnx> precision=fp32|fp16|bf16          # TensorRT engine + metadata (uv pip install tensorrt); build from the fp32 graph
 uv run visnavkit-check-export checkpoint=<ckpt> pth=<out.pth> onnx=<out.onnx> engine=<engine>  # the traced inputs through every artifact
+uv run visnavkit-export-smoke <overrides> [--precision fp16 --engine-precision bf16 --no-engine]  # random weights through the whole path
 ```
 
 ## What `export/policy.py` does (`scripts/export.py` is its Hydra main)

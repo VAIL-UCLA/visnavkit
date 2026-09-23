@@ -129,6 +129,7 @@ uv run visnavkit-train-route route=vae                      # route-patch AE/VAE
 uv run visnavkit-export checkpoint=logs/baseline/.../last.ckpt output=outputs/policy.onnx precision=fp32  # fp32 | fp16
 uv run visnavkit-build-engine onnx=outputs/policy.onnx precision=fp16     # TensorRT fp32 | fp16 | bf16 -> policy.fp16.engine
 uv run visnavkit-check-export checkpoint=logs/baseline/.../last.ckpt onnx=outputs/policy.onnx engine=outputs/policy.fp16.engine
+uv run visnavkit-export-smoke model=gnm      # the same path on random weights: ckpt -> ONNX -> engine -> check, with latencies
 uv run visnavkit-benchmark command=export model=gnm output_dir=outputs/benchmark/gnm
 ```
 
