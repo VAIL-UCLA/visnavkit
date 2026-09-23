@@ -11,11 +11,11 @@ uv run visnavkit-build-engine onnx=<out.onnx> precision=fp32|fp16|bf16          
 uv run visnavkit-check-export checkpoint=<ckpt> pth=<out.pth> onnx=<out.onnx> engine=<engine>  # the traced inputs through every artifact
 ```
 
-## What `scripts/export.py` does
+## What `export/policy.py` does (`scripts/export.py` is its Hydra main)
 1. Restores the checkpoint's model/preprocessing config (`prepare_export_config`), flips `temporal_encoder.reduction` `none -> last`.
 2. `LitModel.load_from_checkpoint(..., weights_only=False)`, then `reparameterize_model`: `.reparameterize()` (FastViT) + Linear->BatchNorm1d folding; `vision_encoder.prepare_for_export((h, w))` precomputes ViT position embeddings.
 3. Builds example inputs from `policy.example_inputs(...)`; input names are presence-driven: `vision (1,3,h,w)`, `feature_buffer (1, seq_step*(seq_len-1), K*feat_size)`, then one `goal` input per goal encoder (`goal`, or `goal_0..n`), one input per key the modality encoders read (`ego (1,E)`, `intrinsics (1,3,3)`, `extrinsics (1,4,4)`, ...), and `noise (1, M, T, A)` for generative decoders. Outputs: `plan, feat_out`, then `speed` when `vision_encoder.speed_head=true`, then `*heads`.
-4. Traces `policy.predict` with the MHA fastpath disabled, slims (onnxslim, optional extra), casts the weights to `precision` (io kept fp32), enforces output order, runs ONNX Runtime parity on the same nonzero inputs at that precision's tolerance (`utils/artifacts.py`) and writes `.pth` (fp32 weights + config), `.metadata.json` and `.inputs.npz` beside the graph.
+4. Traces `policy.predict` with the MHA fastpath disabled, slims (onnxslim, optional extra), casts the weights to `precision` (io kept fp32), enforces output order, runs ONNX Runtime parity on the same nonzero inputs at that precision's tolerance (`export/artifacts.py`) and writes `.pth` (fp32 weights + config), `.metadata.json` and `.inputs.npz` beside the graph.
 
 ## Debugging
 - Unsupported aten op: usually a training-only branch; confirm `eval()` and the reduction flip. New denoisers must avoid data-dependent control flow (fixed `sample_steps`).

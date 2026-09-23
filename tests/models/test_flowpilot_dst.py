@@ -253,8 +253,8 @@ def test_dune_frame_encoder_is_frozen_and_pools_single_frames():
 
 def test_window_export_matches_onnx_runtime_and_the_check_replays_it(tmp_path):
     """The traced window graph: fp32 parity, the .pth / metadata / inputs sidecars, and the check on all of them."""
-    from visnavkit.scripts.check_export import check_export
-    from visnavkit.scripts.export_dst import export_dst
+    from visnavkit.export.check import check_export
+    from visnavkit.export.dst import export_dst
 
     torch.set_num_threads(1)
     with initialize_config_module(version_base=None, config_module="visnavkit.configs"):

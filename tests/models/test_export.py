@@ -10,9 +10,10 @@ import torch
 from hydra import compose, initialize_config_module
 
 from visnavkit.benchmark.export import sha256_file
-from visnavkit.scripts.check_export import check_export
-from visnavkit.scripts.export import export_policy, parse_plan_output
-from visnavkit.utils.artifacts import compare_outputs, convert_onnx, onnx_precision, tolerance
+from visnavkit.export.artifacts import compare_outputs
+from visnavkit.export.check import check_export
+from visnavkit.export.policy import export_policy, parse_plan_output
+from visnavkit.export.precision import convert_onnx, onnx_precision, tolerance
 
 SMALL = [
     "common.seq_length=2",
@@ -72,7 +73,7 @@ def _inputs(path):
 def test_untrained_export_has_presence_driven_inputs_and_parity(tmp_path, overrides, inputs):
     torch.set_num_threads(1)
     path = tmp_path / "policy.onnx"
-    errors = export_policy(_cfg(*overrides), path, precision="fp32")
+    errors = export_policy(_cfg(*overrides), path, precision="fp32")["parity_max_abs_error"]
     assert _inputs(path) == inputs
     assert set(errors) == {"plan", "feat_out"}
     # These are absolute errors on untrained outputs; export_policy itself applies the relative
@@ -99,9 +100,9 @@ def test_checkpoint_round_trip_enforces_parity(tmp_path):
     restored = LitModel.load_from_checkpoint(checkpoint, cfg=cfg)
     assert not any(p.requires_grad is None for p in restored.parameters())
     path = tmp_path / "trained.onnx"
-    errors = export_policy(cfg, path, precision="fp32", checkpoint=str(checkpoint))
-    assert errors["plan"] < 2e-4
-    meta = json.loads(path.with_suffix(".metadata.json").read_text())
+    meta = export_policy(cfg, path, precision="fp32", checkpoint=str(checkpoint))
+    assert meta["parity_max_abs_error"]["plan"] < 2e-4
+    assert meta == json.loads(path.with_suffix(".metadata.json").read_text())
     assert meta["weights"] == "checkpoint" and meta["checkpoint_sha256"] == sha256_file(checkpoint)
     # The checkpoint, the .pth and the graph agree on the traced inputs; the .pth runs the same weights bit for bit.
     pth = str(path.with_suffix(".pth"))

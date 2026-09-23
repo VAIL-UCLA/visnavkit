@@ -27,10 +27,10 @@ SMALL = [
 def test_engine_matches_the_pytorch_reference(tmp_path, precision):
     if not torch.cuda.is_available():
         pytest.skip("needs a GPU")
+    from visnavkit.export.check import check_export
+    from visnavkit.export.policy import export_policy
+    from visnavkit.export.trt import build_engine
     from visnavkit.scripts.build_engine import print_engine_summary
-    from visnavkit.scripts.check_export import check_export
-    from visnavkit.scripts.export import export_policy
-    from visnavkit.utils.trt import build_engine
 
     with initialize_config_module(version_base=None, config_module="visnavkit.configs"):
         cfg = compose(config_name="export", overrides=SMALL)

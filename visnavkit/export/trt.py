@@ -10,7 +10,8 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from visnavkit.utils.artifacts import ENGINE_PRECISIONS, check_precision, describe, write_metadata
+from visnavkit.export.artifacts import describe, write_metadata
+from visnavkit.export.precision import ENGINE_PRECISIONS, check_precision
 from visnavkit.utils.logger import get_logger
 
 logger = get_logger(__name__)

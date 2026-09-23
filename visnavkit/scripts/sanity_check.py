@@ -217,10 +217,11 @@ def main(argv=None):
     print(f"Pipeline: {pipeline_path}")
 
     if args.onnx:
-        from visnavkit.scripts.export import export_policy
+        from visnavkit.export.policy import export_policy
 
         model_path = args.output_dir / "model.onnx"
-        parity = export_policy(cfg, model_path, precision="fp32", checkpoint=None, batch_size=batch)
+        meta = export_policy(cfg, model_path, precision="fp32", checkpoint=None, batch_size=batch)
+        parity = meta["parity_max_abs_error"]
         errors = ", ".join(f"{name}={value:.3g}" for name, value in parity.items())
         print(f"[PASS] ONNX Runtime parity (maximum absolute errors: {errors})")
         print(f"ONNX: {model_path}")

@@ -14,7 +14,7 @@ from pathlib import Path
 import hydra
 from omegaconf import DictConfig
 
-from visnavkit.utils.trt import build_engine
+from visnavkit.export.trt import build_engine
 
 
 def print_engine_summary(meta):
