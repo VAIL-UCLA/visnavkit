@@ -25,3 +25,4 @@ wandb
 *.pth
 *.engine
 nohup.out
+.venv
