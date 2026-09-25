@@ -22,4 +22,7 @@ wandb
 # never commit model weights
 *.ckpt
 *.onnx
+*.pth
+*.engine
 nohup.out
+.venv

@@ -111,15 +111,20 @@ per frame under `reduction=none`; both share `encode_window`.
 
 `NavigationPolicy.predict(frame, feature_buffer, goal=None, noise=None, **modality_inputs)`
 encodes one frame and reuses buffered past tokens `(B, history, K * D)`; the newest frame's
-modality inputs carry no frame axis. `scripts/export.py` traces it with presence-driven inputs —
-`vision`, `feature_buffer`, one `goal` per goal encoder, one per modality key, `noise` — and
-verifies ONNX Runtime parity. `benchmark/export.py` traces the full window with fixed shapes and
-outputs `trajectories`, `scores` (plus `speed`) for latency and open-loop measurements. FlowPilot-DST
-stands outside that family (no `vision_encoder` / feature buffer): `scripts/export_dst.py` traces
-`FlowPilotDST.deploy` — the window in, the current frame's top-k plans out — and
-`docs/flowpilot_dst_onnx.md` documents that contract. Both flip
-`reduction=none` to `last`, precompute ViT position embeddings for the export resolution and
-disable the MHA fast path.
+modality inputs carry no frame axis. A model owns its deployment graph: `export_graph(cfg,
+batch_size)` returns the traced wrapper, example inputs and io names, `decision(outputs)` reads the
+newest decision back. `NavigationPolicy` traces `predict` with presence-driven inputs — `vision`,
+`feature_buffer`, one `goal` per goal encoder, one per modality key, `noise` — after flipping
+`reduction=none` to `last` and precomputing ViT position embeddings for the export resolution;
+`FlowPilotDST` traces `deploy`, the window in and the current frame's top-k plans out
+([contract](flowpilot_dst_onnx.md)). `export/graph.py` folds the model (FastViT branches,
+Linear-BatchNorm, RMSNorm), traces at fixed shapes with the MHA fast path disabled, casts the
+weights to `precision` (`fp32` | `fp16`, io stays fp32), verifies ONNX Runtime parity and writes
+`.pth` (weights + config), `.metadata.json` and `.inputs.npz` beside the graph. `export/trt.py`
+builds a TensorRT engine at the graph's precision (TensorRT 11 is strongly typed); `export/check.py`
+replays the traced inputs through checkpoint, `.pth`, ONNX Runtime and engine at each precision's
+tolerance. `benchmark/export.py` traces the full window and outputs `trajectories`, `scores` (plus
+`speed`) for latency and open-loop measurements.
 
 ## Add a component
 

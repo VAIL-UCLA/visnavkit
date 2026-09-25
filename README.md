@@ -27,6 +27,7 @@ for the losses) and `predict` its streaming view (the newest frame plus a featur
 ```bash
 uv sync                    # CPU ONNX Runtime included; Linux resolves CUDA 13 torch wheels
 uv sync --extra export     # + onnxslim for deployment graphs
+uv pip install --python .venv tensorrt-cu12   # + TensorRT engines (tensorrt-cu13 on a CUDA 13 driver); --python: not the conda base
 uv sync --extra dali       # + NVIDIA DALI GPU video decoding (Linux)
 export VISNAVKIT_DATA_ROOT=/data/nav_clips   # what common.data_root reads
 ```
@@ -125,7 +126,10 @@ Sidecar layout, the opt-in ego and calibration inputs, and the public corpora th
 ```bash
 uv run visnavkit-train dataset=torch model=mimic ema=default
 uv run visnavkit-train-route route=vae                      # route-patch AE/VAE from route_images.npy
-uv run visnavkit-export checkpoint=logs/baseline/.../last.ckpt output=outputs/policy.onnx
+uv run visnavkit-export checkpoint=logs/baseline/.../last.ckpt output=outputs/policy.onnx precision=fp32  # fp32 | fp16
+uv run visnavkit-build-engine onnx=outputs/policy.onnx                    # TensorRT engine at the graph's precision -> policy.fp32.engine
+uv run visnavkit-check-export checkpoint=logs/baseline/.../last.ckpt onnx=outputs/policy.onnx engine=outputs/policy.fp16.engine
+uv run visnavkit-export-smoke model=gnm      # the same path on random weights: ckpt -> ONNX -> engine -> check, with latencies
 uv run visnavkit-benchmark command=export model=gnm output_dir=outputs/benchmark/gnm
 ```
 
@@ -135,7 +139,10 @@ a clean tree) and keeps overrides in
 [`configs/experiment/`](visnavkit/configs/experiment/). The deployment graph streams one frame
 through a feature buffer; the benchmark graph runs the full window for latency and open-loop
 metrics — [architecture](docs/architecture.md#inference-deployment-benchmark),
-[benchmark](docs/benchmark.md).
+[benchmark](docs/benchmark.md). An export also writes `.pth` (weights + config, Lightning-free),
+`.metadata.json` and `.inputs.npz` beside the graph; the check replays those inputs through the
+checkpoint, the `.pth`, ONNX Runtime and the TensorRT engine and prints per-output errors, hashes
+and latency.
 
 ## Development
 
