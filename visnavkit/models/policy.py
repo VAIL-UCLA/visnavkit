@@ -2,10 +2,12 @@
 
 from collections.abc import Mapping, Sequence
 
+import numpy as np
 import torch
 import torch.nn as nn
 from omegaconf import DictConfig
 
+from visnavkit.models.action.outputs import parse_plan_output
 from visnavkit.models.outputs import PolicyOutput, VisionOutput
 from visnavkit.utils.logger import get_logger
 
@@ -32,6 +34,23 @@ def _as_list(value) -> list:
     if isinstance(value, nn.Module) or torch.is_tensor(value):
         return [value]
     return list(value)
+
+
+class _ExportPolicy(nn.Module):
+    """Positional ``predict`` wrapper so absent goal / noise inputs never appear in the graph."""
+
+    def __init__(self, policy):
+        super().__init__()
+        self.policy = policy
+
+    def forward(self, *inputs):
+        kwargs = dict(zip(self.policy.export_input_names(), inputs))
+        goal_names = self.policy.goal_input_names()
+        goal = [kwargs[name] for name in goal_names] if len(goal_names) > 1 else kwargs.get("goal")
+        modalities = {name: kwargs[name] for name in self.policy.modality_input_names if name in kwargs}
+        return self.policy.predict(
+            kwargs["vision"], kwargs["feature_buffer"], goal=goal, noise=kwargs.get("noise"), **modalities
+        )
 
 
 class NavigationPolicy(nn.Module):
@@ -307,6 +326,35 @@ class NavigationPolicy(nn.Module):
         if self.action_decoder.uses_noise:
             inputs.append(self.action_decoder.example_noise(batch_size, device))
         return tuple(inputs)
+
+    def export_graph(self, cfg, batch_size=1, export_heads=(), **_):
+        """``(wrapper, inputs, input_names, output_names)`` of the deployment graph, on an export copy: the
+        newest frame's decision from one frame plus the feature buffer, at the recipe's export resolution."""
+        if self.temporal_encoder.reduction == "none":
+            self.temporal_encoder.reduction = "last"  # training predicts per frame; deployment wants the newest
+        self.export_heads = [name for name in export_heads if name in self.vision_encoder.heads]
+        w, h = (int(v // cfg.common.downscale_factor) for v in cfg.common.crop_wh)
+        self.vision_encoder = self.vision_encoder.prepare_for_export((h, w))
+        inputs = self.example_inputs(batch_size, (h, w), next(self.parameters()).device)
+        return _ExportPolicy(self).eval(), inputs, self.export_input_names(), self.export_output_names()
+
+    def decision(self, outputs):
+        """The newest decision of NumPy ``outputs`` (by name): a label, its endpoint (x, y) in metres and the
+        SANITY CHECK lines."""
+        decoder = self.action_decoder
+        plan = torch.as_tensor(np.asarray(outputs["plan"])[:1])
+        parsed = parse_plan_output(
+            plan, num_modes=decoder.num_modes, num_pts=decoder.num_pts, pose_size=decoder.pose_size
+        )
+        logits, best_plan = plan.reshape(decoder.num_modes, -1)[:, -1].numpy(), parsed["best_plan"][0, :, :2].numpy()
+        best = int(np.argmax(logits))
+        lines = [f"speed: {float(np.asarray(outputs['speed']).reshape(-1)[0]):.4f}"] if "speed" in outputs else []
+        lines += [
+            f"logits: {np.round(logits, 3)}",
+            f"best_plan p0: {np.round(best_plan[0], 2)}",
+            f"best_plan pN: {np.round(best_plan[-1], 2)}",
+        ]
+        return f"mode {best} logit={logits[best]:.3f}", best_plan[-1].astype(np.float64), lines
 
     def example_batch(self, batch_size: int, frames: int, image_hw: tuple[int, int], device=None):
         """Synthetic ``(vision, goal, {modality key: value})`` inputs for shape checks."""

@@ -1,9 +1,8 @@
-"""The ``NavigationPolicy`` deployment graph: one frame plus the feature buffer in, the newest decision out.
+"""A model's deployment ONNX graph at a precision, with its ``.pth`` / ``.metadata.json`` / ``.inputs.npz`` sidecars.
 
-Graph inputs are presence-driven: ``vision``, ``feature_buffer``, then one ``goal`` input per goal encoder, one
-input per key its modality encoders read (``ego``, ``intrinsics``/``extrinsics``, ...), and ``noise`` for
-generative decoders. Outputs: ``plan``, ``feat_out``, plus ``speed`` when the recipe enables the auxiliary speed
-head, then the requested ``export_heads``. The batch axis is dynamic.
+The model owns its graph: ``export_graph(cfg, batch_size, **options)`` returns the traced wrapper, its example
+inputs and the io names; ``decision(outputs)`` reads the newest decision back from NumPy outputs. Shapes are
+fixed at export (``batch_size``): TensorRT builds them without a profile.
 """
 
 import copy
@@ -31,14 +30,24 @@ logger = get_logger(__name__)
 EXPORT_OPTIONS = ("checkpoint", "output", "onnx_opset_version", "precision", "export_heads")
 
 
-def enforce_output_order(model_onnx: onnx.ModelProto, output_names: list[str]) -> onnx.ModelProto:
-    output_map = {out.name: out for out in model_onnx.graph.output}
-    if not all(name in output_map for name in output_names):
-        return model_onnx
-    del model_onnx.graph.output[:]
-    for name in output_names:
-        model_onnx.graph.output.append(output_map[name])
-    return model_onnx
+class _RMSNorm(nn.Module):
+    """``nn.RMSNorm`` in primitive ops: ``aten::rms_norm`` has no ONNX lowering below opset 23."""
+
+    def __init__(self, src: nn.RMSNorm):
+        super().__init__()
+        self.weight = src.weight
+        self.eps = src.eps
+
+    def forward(self, x):
+        eps = torch.finfo(x.dtype).eps if self.eps is None else self.eps
+        x = x * torch.rsqrt(x.float().pow(2).mean(-1, keepdim=True) + eps).to(x.dtype)
+        return x if self.weight is None else x * self.weight
+
+
+def unfuse_rms_norm(module):
+    for name, child in module.named_children():
+        unfuse_rms_norm(child) if not isinstance(child, nn.RMSNorm) else setattr(module, name, _RMSNorm(child))
+    return module
 
 
 def fuse_linear_bn_pairs(module: nn.Module) -> None:
@@ -52,18 +61,29 @@ def fuse_linear_bn_pairs(module: nn.Module) -> None:
         fuse_linear_bn_pairs(child)
 
 
-def reparameterize_model(model: torch.nn.Module) -> torch.nn.Module:
-    """A deep copy with the FastViT training branches folded and Linear-BatchNorm pairs fused."""
-    model = copy.deepcopy(model)
+def reparameterize_model(model: nn.Module) -> nn.Module:
+    """An eval-mode deep copy with the FastViT training branches folded, Linear-BatchNorm pairs fused and
+    RMSNorm in primitive ops."""
+    model = copy.deepcopy(model).eval()
     for module in model.modules():
         if hasattr(module, "reparameterize"):
             module.reparameterize()
     fuse_linear_bn_pairs(model)
-    return model
+    return unfuse_rms_norm(model)
+
+
+def enforce_output_order(model_onnx: onnx.ModelProto, output_names: list[str]) -> onnx.ModelProto:
+    output_map = {out.name: out for out in model_onnx.graph.output}
+    if not all(name in output_map for name in output_names):
+        return model_onnx
+    del model_onnx.graph.output[:]
+    for name in output_names:
+        model_onnx.graph.output.append(output_map[name])
+    return model_onnx
 
 
 def parse_plan_output(output, M, num_pts, pose_width):
-    """Single-sample NumPy helper for deployment consumers (xy trajectories only)."""
+    """Single-sample NumPy helper for deployment consumers of the policy's ``plan`` (xy trajectories only)."""
     output = np.asarray(output).reshape(1, M * (num_pts * 2 * pose_width + 1))
     parsed = parse_tensor_plan_output(torch.from_numpy(output), num_modes=M, num_pts=num_pts, pose_size=pose_width)
     return dict(
@@ -74,60 +94,16 @@ def parse_plan_output(output, M, num_pts, pose_width):
     )
 
 
-class _ExportPolicy(nn.Module):
-    """Positional ``predict`` wrapper so absent goal/noise inputs never appear in the graph."""
-
-    def __init__(self, policy):
-        super().__init__()
-        self.policy = policy
-
-    def forward(self, *inputs):
-        kwargs = dict(zip(self.policy.export_input_names(), inputs))
-        goal_names = self.policy.goal_input_names()
-        goal = [kwargs[name] for name in goal_names] if len(goal_names) > 1 else kwargs.get("goal")
-        modalities = {name: kwargs[name] for name in self.policy.modality_input_names if name in kwargs}
-        return self.policy.predict(
-            kwargs["vision"], kwargs["feature_buffer"], goal=goal, noise=kwargs.get("noise"), **modalities
-        )
-
-
-def prepare_graph(model, cfg, *, batch_size=1, seed=0, export_heads=(), device=None, **_):
-    """``(wrapper, inputs, input_names, output_names)`` from an eval-mode policy: the newest-frame reduction,
-    folded FastViT / Linear-BatchNorm branches, ViT position embeddings for the export resolution."""
-    infer_model = reparameterize_model(model).eval()
-    if infer_model.temporal_encoder.reduction == "none":
-        # Training predicts per frame; deployment wants the newest frame's decision only.
-        infer_model.temporal_encoder.reduction = "last"
-    infer_model.export_heads = [name for name in export_heads if name in infer_model.vision_encoder.heads]
+def prepare_graph(model, cfg, *, batch_size=1, seed=0, device=None, **options):
+    """``(wrapper, inputs, input_names, output_names)``: the model's own ``export_graph`` on a folded copy placed
+    on ``device`` (default: CUDA when usable), with seeded example inputs. ``model`` keeps its structure."""
     device = torch.device(device) if device else default_device()
-    infer_model = infer_model.to(device)
-    img_w = int(cfg.common.crop_wh[0] // cfg.common.downscale_factor)
-    img_h = int(cfg.common.crop_wh[1] // cfg.common.downscale_factor)
-    infer_model.vision_encoder = infer_model.vision_encoder.prepare_for_export((img_h, img_w))
     torch.manual_seed(seed)
-    inputs = infer_model.example_inputs(batch_size, (img_h, img_w), device)
-    wrapper = _ExportPolicy(infer_model).eval()
-    return wrapper, inputs, infer_model.export_input_names(), infer_model.export_output_names()
+    return reparameterize_model(model).to(device).export_graph(cfg, batch_size, **options)
 
 
-def decision(model, outputs):
-    """The newest decision: a label, its endpoint (x, y) in metres and the SANITY CHECK lines."""
-    decoder = model.action_decoder
-    parsed = parse_plan_output(
-        np.asarray(outputs["plan"])[:1], M=decoder.num_modes, num_pts=decoder.num_pts, pose_width=decoder.pose_size
-    )
-    best = int(np.argmax(parsed["pred_logits"]))
-    lines = [f"speed: {float(np.asarray(outputs['speed']).reshape(-1)[0]):.4f}"] if "speed" in outputs else []
-    lines += [
-        f"logits: {np.round(parsed['pred_logits'], 3)}",
-        f"best_plan p0: {np.round(parsed['best_plan'][0], 2)}",
-        f"best_plan pN: {np.round(parsed['best_plan'][-1], 2)}",
-    ]
-    return f"mode {best} logit={parsed['pred_logits'][best]:.3f}", parsed["best_plan"][-1].astype(np.float64), lines
-
-
-def load_policy(cfg):
-    """The policy and its config: a checkpoint restores its own architecture / preprocessing config with the
+def load(cfg):
+    """The model and its config: a checkpoint restores its own architecture / preprocessing config with the
     export options retained; ``checkpoint=null`` composes untrained weights (pipeline check)."""
     if not cfg.checkpoint:
         return instantiate_model(cfg), cfg
@@ -136,7 +112,7 @@ def load_policy(cfg):
     return model, OmegaConf.merge(OmegaConf.to_container(saved, resolve=True), options)
 
 
-def export_policy(
+def export_onnx(
     cfg,
     output,
     *,
@@ -169,7 +145,7 @@ def export_policy(
             cfg.onnx_opset_version = opset
         if export_heads is not None:
             cfg.export_heads = list(export_heads)
-    model, cfg = load_policy(cfg)
+    model, cfg = load(cfg)
     precision = check_precision(str(cfg.precision), ONNX_PRECISIONS)
     opset = int(cfg.onnx_opset_version)
     output = Path(output)
@@ -191,7 +167,6 @@ def export_policy(
             str(output),
             input_names=input_names,
             output_names=output_names,
-            dynamic_axes={name: {0: "batch_size"} for name in [*input_names, *output_names]},
             opset_version=opset,
             do_constant_folding=True,
             verbose=False,
@@ -218,6 +193,5 @@ def export_policy(
         precision=precision,
         opset=opset,
         seed=seed,
-        decision=decision,
         strict=strict,
     )

@@ -12,7 +12,7 @@ from hydra import compose, initialize_config_module
 from visnavkit.benchmark.export import sha256_file
 from visnavkit.export.artifacts import compare_outputs
 from visnavkit.export.check import check_export
-from visnavkit.export.policy import export_policy, parse_plan_output
+from visnavkit.export.graph import export_onnx, parse_plan_output
 from visnavkit.export.precision import convert_onnx, onnx_precision, tolerance
 
 SMALL = [
@@ -73,10 +73,10 @@ def _inputs(path):
 def test_untrained_export_has_presence_driven_inputs_and_parity(tmp_path, overrides, inputs):
     torch.set_num_threads(1)
     path = tmp_path / "policy.onnx"
-    errors = export_policy(_cfg(*overrides), path, precision="fp32")["parity_max_abs_error"]
+    errors = export_onnx(_cfg(*overrides), path, precision="fp32")["parity_max_abs_error"]
     assert _inputs(path) == inputs
     assert set(errors) == {"plan", "feat_out"}
-    # These are absolute errors on untrained outputs; export_policy itself applies the relative
+    # These are absolute errors on untrained outputs; export_onnx itself applies the relative
     # check (rtol 2e-3), and an untrained denoiser amplifies float noise over its sampling loop.
     assert all(error < 5e-3 for error in errors.values()), errors
 
@@ -100,7 +100,7 @@ def test_checkpoint_round_trip_enforces_parity(tmp_path):
     restored = LitModel.load_from_checkpoint(checkpoint, cfg=cfg)
     assert not any(p.requires_grad is None for p in restored.parameters())
     path = tmp_path / "trained.onnx"
-    meta = export_policy(cfg, path, precision="fp32", checkpoint=str(checkpoint))
+    meta = export_onnx(cfg, path, precision="fp32", checkpoint=str(checkpoint))
     assert meta["parity_max_abs_error"]["plan"] < 2e-4
     assert meta == json.loads(path.with_suffix(".metadata.json").read_text())
     assert meta["weights"] == "checkpoint" and meta["checkpoint_sha256"] == sha256_file(checkpoint)
@@ -136,7 +136,7 @@ REGRESSION = ["model/vision_encoder=resnet18", "model/action_decoder=regression"
 def test_untrained_export_writes_sidecars_the_check_replays(tmp_path):
     torch.set_num_threads(1)
     path = tmp_path / "policy.onnx"
-    export_policy(_cfg(*REGRESSION), path, precision="fp32")
+    export_onnx(_cfg(*REGRESSION), path, precision="fp32")
     meta = json.loads(path.with_suffix(".metadata.json").read_text())
     assert (meta["precision"], meta["stored_precision"], meta["weights"]) == ("fp32", "fp32", "untrained")
     assert meta["onnx_sha256"] == sha256_file(path) and meta["pth_sha256"] == sha256_file(path.with_suffix(".pth"))
@@ -150,7 +150,7 @@ def test_untrained_export_writes_sidecars_the_check_replays(tmp_path):
 def test_fp16_export_keeps_fp32_io_and_stays_within_its_tolerance(tmp_path):
     torch.set_num_threads(1)
     path = tmp_path / "policy.onnx"
-    export_policy(_cfg(*REGRESSION), path, precision="fp16")
+    export_onnx(_cfg(*REGRESSION), path, precision="fp16")
     session = ort.InferenceSession(str(path), providers=["CPUExecutionProvider"])
     assert {node.type for node in (*session.get_inputs(), *session.get_outputs())} == {"tensor(float)"}
     assert onnx_precision(onnx.load(str(path)))[0] == "fp16"

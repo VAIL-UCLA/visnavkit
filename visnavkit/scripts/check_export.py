@@ -2,7 +2,6 @@
 
     uv run visnavkit-check-export checkpoint=last.ckpt onnx=policy.onnx engine=policy.fp16.engine
     uv run visnavkit-check-export pth=policy.pth onnx=policy.onnx                # Lightning-free reference
-    uv run visnavkit-check-export checkpoint=last.ckpt onnx=flowpilot_dst.onnx   # FlowPilot-DST window graph
 
 Exit status 1 when an output leaves its tolerance or a sidecar hash does not match.
 """
@@ -25,7 +24,6 @@ def main(cfg: DictConfig):
         inputs=cfg.inputs,
         seed=cfg.seed,
         batch_size=cfg.batch_size,
-        top_k=cfg.top_k,
         device=cfg.device,
         provider=cfg.provider,
         atol=cfg.atol,

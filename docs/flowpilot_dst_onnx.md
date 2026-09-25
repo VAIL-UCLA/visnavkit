@@ -5,12 +5,12 @@ frame's top-`k` plans. Shapes are fixed (batch 1), so every slot must carry a fr
 patch; at startup repeat the oldest frame and patch.
 
 ```bash
-uv run visnavkit-export-dst \
-  checkpoint=logs/visnavkit/<run>/checkpoints/last.ckpt output=flowpilot_dst.onnx
+uv run visnavkit-export \
+  checkpoint=logs/visnavkit/<run>/checkpoints/last.ckpt output=flowpilot_dst.onnx precision=fp32
 ```
 The export writes `flowpilot_dst.onnx`, `.pth` (the weights and config, Lightning-free), `.metadata.json`
-(shapes, anchor times, parity, checkpoint hash) and `.inputs.npz` (the traced sample inputs, for a first
-smoke run). fp32 by default (`precision=fp16` halves the weights, io stays fp32), opset 17.
+(shapes, parity, checkpoint hash, the config) and `.inputs.npz` (the traced sample inputs, for a first
+smoke run). `precision=fp16` halves the weights, io stays fp32; opset 14.
 
 ## Inputs
 
@@ -88,8 +88,8 @@ For a pinhole camera (`cam_type` 0) drop the `s` factor.
   that needs a streaming graph, which this export does not provide.
 - **On a real clips1k validation window** the graph matched PyTorch to 3.0e-6, and the top plan's
   ADE against the ground truth was 0.45 m over 4 s (the epoch-5 checkpoint).
-- **TensorRT:** `uv run visnavkit-build-engine onnx=flowpilot_dst.onnx` (fixed shapes, no profile needed; the
-  engine takes the graph's precision, so export with `precision=fp16` for an fp16 engine), then `uv run visnavkit-check-export checkpoint=<ckpt> onnx=flowpilot_dst.onnx
+- **TensorRT:** `uv run visnavkit-build-engine onnx=flowpilot_dst.onnx` (the engine takes the graph's
+  precision, so export with `precision=fp16` for an fp16 engine), then `uv run visnavkit-check-export checkpoint=<ckpt> onnx=flowpilot_dst.onnx
   engine=flowpilot_dst.fp16.engine` replays the traced window through every artifact and prints the per-output
   errors, the top plan's endpoint delta, hashes and latency.
 - **A wrong `action_bounds` row silently rescales every output**, since the plan is decoded from

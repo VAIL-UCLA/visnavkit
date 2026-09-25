@@ -1,12 +1,12 @@
 """Build a TensorRT engine from an exported ONNX graph and write ``<engine>.metadata.json`` beside it.
 
     uv run visnavkit-build-engine onnx=outputs/policy.onnx                 # -> outputs/policy.<graph precision>.engine
-    uv run visnavkit-build-engine onnx=flowpilot_dst.onnx workspace_gb=8
+    uv run visnavkit-build-engine onnx=policy.onnx workspace_gb=8 tf32=true
 
 Needs ``tensorrt`` (``uv pip install tensorrt-cu12`` or ``tensorrt-cu13``, matching the driver's CUDA) and the GPU
 the engine will run on. The engine computes at the graph's stored precision (TensorRT 11 is strongly typed): export
-with ``precision=fp16`` for an fp16 engine. ``batch=[min,opt,max]`` sizes the dynamic batch axis of
-``visnavkit-export`` graphs. Compare the engine with the checkpoint and the graph through ``visnavkit-check-export``.
+with ``precision=fp16`` for an fp16 engine. Compare the engine with the checkpoint and the graph through
+``visnavkit-check-export``.
 """
 
 from pathlib import Path
@@ -31,8 +31,6 @@ def print_engine_summary(meta):
     )
     for name, spec in meta["io"].items():
         print(f"{spec['mode']:6} : {name}{tuple(spec['shape'])} {spec['dtype']}")
-    if meta["batch_profile"]:
-        print(f"profile: batch {meta['batch_profile']} on {meta['dynamic_inputs']}")
 
 
 @hydra.main(version_base=None, config_path="../configs", config_name="build_engine")
@@ -45,7 +43,6 @@ def main(cfg: DictConfig):
         precision=precision,
         tf32=cfg.tf32,
         workspace_gb=cfg.workspace_gb,
-        batch=tuple(int(size) for size in cfg.batch),
         verbose=cfg.verbose,
     )
     print_engine_summary(meta)

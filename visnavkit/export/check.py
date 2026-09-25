@@ -14,7 +14,6 @@ import numpy as np
 import onnx
 import torch
 
-from visnavkit.export import dst, policy
 from visnavkit.export.artifacts import (
     compare_outputs,
     describe,
@@ -25,16 +24,11 @@ from visnavkit.export.artifacts import (
     run_onnx,
     size_mb,
 )
+from visnavkit.export.graph import prepare_graph
 from visnavkit.export.precision import model_precision, onnx_precision, tolerance
-from visnavkit.models.flowpilot_dst import FlowPilotDST
 from visnavkit.utils.logger import get_logger
 
 logger = get_logger(__name__)
-
-
-def family(model):
-    """The export family module (``prepare_graph``, ``decision``) of a model."""
-    return dst if isinstance(model, FlowPilotDST) else policy
 
 
 def _torch_runner(wrapper, input_names, output_names, device):
@@ -91,7 +85,6 @@ def check_export(
     inputs=None,
     seed=0,
     batch_size=1,
-    top_k=None,
     device="cpu",
     provider="CPUExecutionProvider",
     atol=None,
@@ -115,9 +108,8 @@ def check_export(
     reference_kind = "checkpoint" if checkpoint else "pth"
     model, cfg = load_model(checkpoint or pth)
     export_heads = list(cfg.get("export_heads") or (onnx_meta or {}).get("config", {}).get("export_heads") or [])
-    top_k = int(top_k or (onnx_meta or {}).get("top_k") or 6)
-    options = dict(batch_size=batch_size, seed=seed, top_k=top_k, export_heads=export_heads, device="cpu")
-    wrapper, generated, input_names, output_names = family(model).prepare_graph(model, cfg, **options)
+    options = dict(batch_size=batch_size, seed=seed, export_heads=export_heads, device="cpu")
+    wrapper, generated, input_names, output_names = prepare_graph(model, cfg, **options)
 
     feeds_source = Path(inputs) if inputs else Path(onnx_path).with_suffix(".inputs.npz") if onnx_path else None
     if feeds_source is not None and feeds_source.exists():
@@ -134,7 +126,7 @@ def check_export(
 
     reference = _torch_runner(wrapper, input_names, output_names, device)
     reference_outputs = reference(feeds)
-    reference_label, reference_endpoint, _ = family(model).decision(model, reference_outputs)
+    reference_label, reference_endpoint, _ = model.decision(reference_outputs)
     report = {
         "reference": {
             "kind": reference_kind,
@@ -158,7 +150,7 @@ def check_export(
     artifacts = []
     if checkpoint and pth:
         pth_model, _ = load_model(pth, cfg)
-        pth_wrapper = family(pth_model).prepare_graph(pth_model, cfg, **options)[0]
+        pth_wrapper = prepare_graph(pth_model, cfg, **options)[0]
         runner = _torch_runner(pth_wrapper, input_names, output_names, device)
         artifacts.append(("pth", pth, model_precision(pth_model), runner, f"PyTorch on {device}"))
     if onnx_path:
@@ -179,7 +171,7 @@ def check_export(
         r, a = tolerance(precision, rtol, atol)
         expected = [reference_outputs[name] for name in output_names]
         errors = compare_outputs(output_names, expected, [outputs[name] for name in output_names], r, a)
-        label, endpoint, _ = family(model).decision(model, outputs)
+        label, endpoint, _ = model.decision(outputs)
         report["artifacts"][kind] = {
             **files[kind],
             "precision": precision,

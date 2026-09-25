@@ -2,7 +2,7 @@
 
     uv run visnavkit-export-smoke model=gnm                              # fp32 ONNX, fp32 engine, CPU reference
     uv run visnavkit-export-smoke model=gnm --precision fp16              # fp16 ONNX and engine
-    uv run visnavkit-export-smoke experiment=flowpilot_dst_clips1k --no-engine
+    uv run visnavkit-export-smoke model=gnm --no-engine                  # without TensorRT
 
 Positional arguments are Hydra overrides on the export config. Parity is reported, not enforced: random weights
 amplify float noise (fp16 features can leave their tolerance; trained weights are the real test). The engine step

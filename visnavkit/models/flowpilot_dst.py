@@ -506,6 +506,17 @@ class DSTOutput(BaseOutput):
     pair_mask: torch.Tensor  # (B T,) frames whose pair is whole: the speed head's supervision
 
 
+class _ExportDST(nn.Module):
+    """Positional ``deploy`` wrapper for the tracer."""
+
+    def __init__(self, model):
+        super().__init__()
+        self.model = model
+
+    def forward(self, vision, route_patch, goal, ego, action_bounds):
+        return self.model.deploy(vision, goal, route_patch, ego, action_bounds)
+
+
 class FlowPilotDST(nn.Module):
     """The policy; ``forward`` takes the batch keys by name (``modality_input_names`` beyond ``vision`` and ``goal``)."""
 
@@ -643,6 +654,36 @@ class FlowPilotDST(nn.Module):
         rows = torch.arange(b, device=vision.device) * t + (t - 1)  # each window's current frame
         modes, prob = self.action_decoder.top_modes(kv[rows], bounds[rows], ego_vw[rows], k)
         return modes, prob, speed[:, -1]
+
+    def export_graph(self, cfg, batch_size=1, **_):
+        """``(wrapper, inputs, input_names, output_names)`` of the window graph: the ``seq_length`` window in
+        (every slot holds a frame and a route patch; pad a short history by repeating the oldest frame), the
+        current frame's top-k plans out. ``docs/flowpilot_dst_onnx.md`` documents the contract."""
+        b, t = batch_size, int(cfg.common.seq_length)
+        w, h = (int(v // cfg.common.downscale_factor) for v in cfg.common.crop_wh)
+        device, route = next(self.parameters()).device, self.route_encoder
+        bounds = torch.tensor([[-0.0, -0.09, -0.05, 0.0, -0.85], [0.14, 0.09, 0.05, 2.76, 0.85]], device=device)
+        inputs = (
+            torch.rand(b, t, 3, h, w, device=device),
+            torch.randint(0, route.num_classes, (b, t, *route.hw), device=device).float(),
+            torch.tensor([8.0, 1.0, 0.0], device=device).expand(b, t, 3).contiguous(),
+            torch.tensor([1.0, 0.0], device=device).expand(b, t, 2).contiguous(),
+            bounds.expand(b, 2, 5),
+        )
+        names = ["vision", "route_patch", "goal", "ego", "action_bounds"], ["modes", "probs", "speed"]
+        return _ExportDST(self).eval(), inputs, *names
+
+    def decision(self, outputs):
+        """The top plan of NumPy ``outputs`` (by name): a label, its endpoint (x, y) in metres and the SANITY
+        CHECK lines."""
+        modes, probs, speed = (np.asarray(outputs[name]) for name in ("modes", "probs", "speed"))
+        lines = [
+            f"probs: {np.round(probs[0], 3)}",
+            f"best plan p0 [x y yaw v w]: {np.round(modes[0, 0, 0], 3)}",
+            f"best plan pN [x y yaw v w]: {np.round(modes[0, 0, -1], 3)}",
+            f"speed: {float(speed.reshape(-1)[0]):.4f}",
+        ]
+        return f"top plan p={probs[0, 0]:.3f}", modes[0, 0, -1, :2].astype(np.float64), lines
 
     def example_batch(self, batch_size, frames, image_hw, device=None):
         """Synthetic ``(vision, goal, {modality key: value})`` inputs for shape checks; every slot holds a frame."""

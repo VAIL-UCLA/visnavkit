@@ -1,5 +1,5 @@
-"""What every export family shares: loading the weights, tracing helpers, ONNX Runtime runs, output parity,
-the ``.pth`` / ``.metadata.json`` / ``.inputs.npz`` sidecars and the closing summary."""
+"""Export plumbing: loading the weights, tracing helpers, ONNX Runtime runs, output parity, the ``.pth`` /
+``.metadata.json`` / ``.inputs.npz`` sidecars and the closing summary."""
 
 import copy
 import json
@@ -156,15 +156,11 @@ def finalize_export(
     precision,
     opset,
     seed,
-    decision,
-    extra=None,
     strict=None,
 ):
     """Cast the traced graph to ``precision`` and save it, check ONNX Runtime parity at that precision's
     tolerance (``strict``, default: enforced for checkpoint weights, reported for untrained ones), write
-    ``.inputs.npz``, ``.pth`` and ``.metadata.json`` beside it and print the summary. Returns the metadata;
-    ``decision(model, outputs)`` is the family's ``(label, endpoint, lines)`` of the newest decision, ``extra``
-    its metadata keys."""
+    ``.inputs.npz``, ``.pth`` and ``.metadata.json`` beside it and print the summary. Returns the metadata."""
     output = Path(output)
     if precision != "fp32":
         logger.info(f"Casting weights to {precision} (io stays fp32)...")
@@ -187,7 +183,7 @@ def finalize_export(
 
     np.savez(output.with_suffix(".inputs.npz"), **feeds)
     pth = save_pth(output.with_suffix(".pth"), cfg, model)
-    label, _, lines = decision(model, outputs)
+    label, _, lines = model.decision(outputs)
     meta = {
         "exp_name": cfg.get("exp_name"),
         "model": type(model).__name__,
@@ -214,7 +210,6 @@ def finalize_export(
         "decision": label,
         "seed": seed,
         "config": OmegaConf.to_container(cfg, resolve=True),
-        **(extra or {}),
     }
     write_metadata(output.with_suffix(".metadata.json"), meta)
     print_export_summary(meta, lines)

@@ -8,9 +8,7 @@ from omegaconf import OmegaConf
 
 from visnavkit.export.artifacts import instantiate_model
 from visnavkit.export.check import check_export
-from visnavkit.export.dst import export_dst
-from visnavkit.export.policy import export_policy
-from visnavkit.models.flowpilot_dst import FlowPilotDST
+from visnavkit.export.graph import export_onnx
 from visnavkit.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -45,20 +43,15 @@ def export_smoke(
     model = save_random_checkpoint(cfg, checkpoint)
     logger.info(f"Random-weight checkpoint: {checkpoint} ({type(model).__name__})")
     onnx_path = output_dir / f"{name}.{precision}.onnx"
-    if isinstance(model, FlowPilotDST):
-        meta = export_dst(
-            cfg, onnx_path, checkpoint=str(checkpoint), batch_size=batch_size, precision=precision, strict=False
-        )
-    else:
-        meta = export_policy(
-            cfg,
-            onnx_path,
-            checkpoint=str(checkpoint),
-            batch_size=batch_size,
-            precision=precision,
-            strict=False,
-            device=device,
-        )
+    meta = export_onnx(
+        cfg,
+        onnx_path,
+        checkpoint=str(checkpoint),
+        batch_size=batch_size,
+        precision=precision,
+        strict=False,
+        device=device,
+    )
     engine_path = None
     if engine:
         try:
@@ -66,10 +59,7 @@ def export_smoke(
             from visnavkit.scripts.build_engine import print_engine_summary
 
             engine_path = output_dir / f"{name}.{engine_precision or precision}.engine"
-            batch = (batch_size,) * 3
-            meta_engine = build_engine(
-                onnx_path, engine_path, precision=engine_precision, workspace_gb=workspace_gb, batch=batch
-            )
+            meta_engine = build_engine(onnx_path, engine_path, precision=engine_precision, workspace_gb=workspace_gb)
             print_engine_summary(meta_engine)
         except ImportError as error:
             logger.warning(f"Skipping the TensorRT engine: {error}")

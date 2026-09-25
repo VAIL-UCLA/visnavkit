@@ -1,4 +1,4 @@
-"""Export a policy to its deployment ONNX graph and verify parity (``export/policy.py``).
+"""Export a model to its deployment ONNX graph and verify parity (``export/graph.py``).
 
     uv run visnavkit-export checkpoint=/path/last.ckpt output=policy.onnx precision=fp16
     uv run visnavkit-export checkpoint=null model=gnm  # untrained pipeline check
@@ -11,12 +11,12 @@ by ``visnavkit-check-export`` and ``visnavkit-build-engine``.
 import hydra
 from omegaconf import DictConfig
 
-from visnavkit.export.policy import export_policy
+from visnavkit.export.graph import export_onnx
 
 
 @hydra.main(version_base=None, config_path="../configs", config_name="export")
 def main(cfg: DictConfig):
-    return export_policy(cfg, cfg.output)
+    return export_onnx(cfg, cfg.output)
 
 
 if __name__ == "__main__":

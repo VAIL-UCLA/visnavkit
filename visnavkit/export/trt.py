@@ -43,15 +43,14 @@ def _logger(trt, verbose=False):
     return _STATE["logger"]
 
 
-def build_engine(onnx_path, output, *, precision=None, tf32=False, workspace_gb=4.0, batch=(1, 1, 1), verbose=False):
+def build_engine(onnx_path, output, *, precision=None, tf32=False, workspace_gb=4.0, verbose=False):
     """Parse ``onnx_path``, build the engine and write it plus ``<output>.metadata.json``.
 
     ``precision`` is the engine's compute dtype, by default the graph's stored one. TensorRT 11 builds strongly
     typed engines, so it must equal the graph's: export the ONNX at that precision. TensorRT 10 can still cast an
     fp32 graph to fp16 / bf16 with a builder flag. io keeps the graph's dtypes. An fp32 engine is exact fp32
     unless ``tf32`` lets its matmuls / convolutions run on tensor cores at 10 mantissa bits (TensorRT's own
-    default; same speed on small models, a visible feature drift).
-    ``batch`` = (min, opt, max) sizes a dynamic leading input axis; other dynamic axes are refused.
+    default; same speed on small models, a visible feature drift). Graphs keep their fixed export shapes.
     """
     trt = _tensorrt()
     onnx_path, output = Path(onnx_path), Path(output)
@@ -80,18 +79,9 @@ def build_engine(onnx_path, output, *, precision=None, tf32=False, workspace_gb=
     if not tf32:
         config.clear_flag(trt.BuilderFlag.TF32)
     tf32 = tf32 and precision == "fp32"
-    profile, dynamic = builder.create_optimization_profile(), []
-    for i in range(network.num_inputs):
-        tensor = network.get_input(i)
-        shape = list(tensor.shape)
-        if -1 not in shape:
-            continue
-        if -1 in shape[1:]:
-            raise ValueError(f"{tensor.name} has a dynamic axis beyond the batch axis: {shape}")
-        profile.set_shape(tensor.name, *[[size, *shape[1:]] for size in batch])
-        dynamic.append(tensor.name)
-    if dynamic:
-        config.add_optimization_profile(profile)
+    for tensor in (network.get_input(i) for i in range(network.num_inputs)):
+        if -1 in tensor.shape:
+            raise ValueError(f"{tensor.name} has a dynamic axis {list(tensor.shape)}; export at fixed shapes")
     source = describe(onnx_path)
     logger.info(f"Building a {precision} engine from {onnx_path} ({source['bytes'] / 2**20:.1f}MB) ...")
     start = time.perf_counter()
@@ -115,8 +105,6 @@ def build_engine(onnx_path, output, *, precision=None, tf32=False, workspace_gb=
         "tensorrt": trt.__version__,
         "gpu": gpu_name(),
         "workspace_bytes": int(workspace_gb * 2**30),
-        "batch_profile": dict(zip(("min", "opt", "max"), batch)) if dynamic else None,
-        "dynamic_inputs": dynamic,
         "io": engine_io(engine),
         "num_layers": engine.num_layers,
         "build_seconds": round(seconds, 1),
