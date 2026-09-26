@@ -7,6 +7,8 @@ output: flowpilot_dst.onnx
 onnx_opset_version: 17
 batch_size: 1
 top_k: 6  # plans returned per call, ranked by score
+noise: zero  # zero: the deterministic path; randn: a `noise` input (B, num_samples, T, 5) to fill with N(0, I) (FlowMatchingPolicy)
+num_samples: 1  # randn only
 
 hydra:
   job:

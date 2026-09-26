@@ -1,0 +1,31 @@
+# FlowMatchingPolicy (visnavkit.models.flow_matching_policy): RGB FastViT-SA12 per 20 Hz slot -> global average-pooled
+# feature; [global | route VAE latent] each Linear -> LayerNorm -> causal temporal attention (past-slot drop 0.1) -> the
+# temporal feature is the one kv token of StepFlowHead (flow matching from noise, one query per plan step + step
+# position + ego [v, w], each ego channel hidden w.p. 0.9). Every slot with a frame is supervised. Needs pose_size 5
+# targets, `ego` starting with [speed, yaw_rate] and action bounds (configs/experiment/flow_matching_policy_clips1k.yaml).
+_target_: visnavkit.models.flow_matching_policy.FlowMatchingPolicy
+dim: 256
+seq_len: ${common.seq_length}
+frame_encoder:
+  _target_: visnavkit.models.vision.frame_encoder.FrameEncoder
+  backbone_name: fastvit_sa12
+  pretrained: true
+temporal:
+  num_layers: 2
+  num_heads: 8
+  dropout: 0.1
+  mask_p: 0.1  # training: random past-slot drop in the causal attention
+  post_norm: true
+route:
+  weights: null  # the frozen route VAE checkpoint (RouteEncoder, 3 classes, 80 x 80); null = random (tests only)
+  num_classes: 3
+action_decoder:
+  _target_: visnavkit.models.action.step_flow.StepFlowHead
+  _partial_: true  # the policy passes dim
+  num_pts: ${plan_len_points}
+  num_layers: 4
+  num_heads: 8
+  dropout: 0.1
+  ego_mask_p: 0.9  # training: hide each ego channel (v, w) w.p. 0.9
+  sample_steps: 4
+  num_samples: 1  # eval / export randn: N(0, I) samples per decision (zero noise is always 1 plan)

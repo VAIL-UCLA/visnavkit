@@ -1,5 +1,5 @@
 """FrameEncoder: one RGB frame per slot through a timm backbone, ``PairEncoder``'s interface without the pair or the
-speed head (``flowpilot_step_dst``). A single frame carries no motion: speed zeros, ``pair_mask`` all False."""
+speed head (``flow_matching_policy``). A single frame carries no motion: speed zeros, ``pair_mask`` all False."""
 
 import timm
 import torch

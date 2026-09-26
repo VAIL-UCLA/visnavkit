@@ -56,8 +56,10 @@ class _ExportDST(nn.Module):
         super().__init__()
         self.model, self.top_k = model, top_k
 
-    def forward(self, vision, route_patch, goal, ego, action_bounds):
-        return self.model.deploy(vision, goal, route_patch, ego, action_bounds, self.top_k)
+    def forward(self, vision, route_patch, goal, ego, action_bounds, noise=None):
+        if noise is None:  # no noise input: the model's own deterministic path
+            return self.model.deploy(vision, goal, route_patch, ego, action_bounds, self.top_k)
+        return self.model.deploy(vision, goal, route_patch, ego, action_bounds, self.top_k, noise=noise)
 
 
 def example_inputs(cfg, batch_size, seed=0):
@@ -77,8 +79,10 @@ def example_inputs(cfg, batch_size, seed=0):
     )
 
 
-def export_dst(cfg, output, *, checkpoint=None, batch_size=1, top_k=6, opset=17, seed=0):
-    """Trace the window graph, check ONNX Runtime parity and write ``<output>.metadata.json``."""
+def export_dst(cfg, output, *, checkpoint=None, batch_size=1, top_k=6, opset=17, seed=0, noise="zero", num_samples=1):
+    """Trace the window graph, check ONNX Runtime parity and write ``<output>.metadata.json``. ``noise``: ``zero`` (the
+    model's deterministic path) or ``randn`` (a ``noise`` input ``(B, num_samples, T, 5)`` the caller fills with N(0, I);
+    models whose ``deploy`` takes ``noise``, e.g. FlowMatchingPolicy)."""
     output = Path(output)
     output.parent.mkdir(parents=True, exist_ok=True)
     cfg = copy.deepcopy(cfg)
@@ -89,8 +93,13 @@ def export_dst(cfg, output, *, checkpoint=None, batch_size=1, top_k=6, opset=17,
     model = reparameterize_model(load_native_model(cfg, checkpoint))  # fold the FastViT training branches
     unfuse_rms_norm(model)
     wrapper = _ExportDST(model, top_k).eval()
-    inputs = example_inputs(cfg, batch_size, seed)
-    logger.info("Export inputs: " + ", ".join(f"{n}{tuple(v.shape)}" for n, v in zip(INPUTS, inputs)))
+    inputs, names = example_inputs(cfg, batch_size, seed), INPUTS
+    if noise == "randn":
+        num_pts = model.action_decoder.num_pts
+        inputs, names = (*inputs, torch.randn(batch_size, num_samples, num_pts, 5)), (*INPUTS, "noise")
+    elif noise != "zero":
+        raise ValueError(f"noise must be zero or randn, got {noise!r}")
+    logger.info("Export inputs: " + ", ".join(f"{n}{tuple(v.shape)}" for n, v in zip(names, inputs)))
 
     fastpath = torch.backends.mha.get_fastpath_enabled()
     torch.backends.mha.set_fastpath_enabled(False)
@@ -101,7 +110,7 @@ def export_dst(cfg, output, *, checkpoint=None, batch_size=1, top_k=6, opset=17,
             wrapper,
             inputs,
             str(output),
-            input_names=list(INPUTS),
+            input_names=list(names),
             output_names=list(OUTPUTS),
             opset_version=opset,
             do_constant_folding=True,
@@ -115,7 +124,7 @@ def export_dst(cfg, output, *, checkpoint=None, batch_size=1, top_k=6, opset=17,
     options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_DISABLE_ALL
     session = ort.InferenceSession(str(output), sess_options=options, providers=["CPUExecutionProvider"])
     used = {i.name for i in session.get_inputs()}  # the exporter prunes an unused input, e.g. goal without a goal token
-    feeds = {name: value.numpy() for name, value in zip(INPUTS, inputs) if name in used}
+    feeds = {name: value.numpy() for name, value in zip(names, inputs) if name in used}
     observed = session.run(list(OUTPUTS), feeds)
     parity = {}
     for name, expected, actual in zip(OUTPUTS, reference, observed):
@@ -136,6 +145,7 @@ def export_dst(cfg, output, *, checkpoint=None, batch_size=1, top_k=6, opset=17,
         "pose_fields": ["x_m", "y_m", "yaw_rad", "v_mps", "w_radps"],
         "target_times_s": target_times(cfg).tolist(),
         "top_k": top_k,
+        "noise": noise,
         "denoising_steps": model.action_decoder.sample_steps,
         "num_anchors": int(getattr(model.action_decoder, "anchors", torch.empty(0)).shape[0]),  # 0: no anchors
         "parameters_total": sum(p.numel() for p in model.parameters()),
@@ -156,6 +166,8 @@ def main(cfg: DictConfig):
         batch_size=cfg.batch_size,
         top_k=cfg.top_k,
         opset=cfg.onnx_opset_version,
+        noise=cfg.noise,
+        num_samples=cfg.num_samples,
     )
 
 
