@@ -1,0 +1,30 @@
+# FlowPilot-Step-DST: flowpilot_dst with an RGB FastViT-SA12 per slot (visnavkit.models.vision.frame_encoder, no pair, no
+# speed head) -> its global average-pooled feature only; [global | route latent] each Linear -> LayerNorm -> causal
+# temporal attention over the 20 slots (random past-slot drop 0.1) -> the temporal feature is the DiT's one kv token ->
+# StepFlowHead (visnavkit.models.action.step_flow): plain flow matching, no anchors, one query per plan step
+# (+ step position + ego [v, w] embedding, each channel hidden w.p. 0.9). Every frame with a frame is supervised.
+# No goal, patch, route or embodiment kv token and no context self-attention.
+defaults:
+  - flowpilot_dst
+  - _self_
+
+frame_encoder:
+  _target_: visnavkit.models.vision.frame_encoder.FrameEncoder
+  backbone_name: fastvit_sa12
+  pretrained: true
+speed_weight: 0.0  # no speed head
+embodiment_token: false
+kv_tokens: [temporal]  # kv = 1 token per frame
+temporal:
+  mask_p: 0.1
+context:
+  num_layers: 0
+action_decoder:
+  _target_: visnavkit.models.action.step_flow.StepFlowHead
+  _partial_: true  # FlowPilotDST passes dim
+  num_pts: ${plan_len_points}
+  num_layers: 4
+  num_heads: 8
+  dropout: 0.1
+  ego_mask_p: 0.9  # training: hide each ego channel (v, w) w.p. 0.9
+  sample_steps: 4

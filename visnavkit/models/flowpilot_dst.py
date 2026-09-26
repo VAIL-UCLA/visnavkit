@@ -28,6 +28,8 @@ Trains on ``dataset=pose`` windows with frames: ``vision`` (B, T, 3, H, W) in [0
    x1_dxdy - eps) + MSE(state, x1_dyaw_v_w) + CE(score, winner). Inference: ``sample_steps`` Euler steps
    from noise 0 and from one N(0, I) draw, the top-score mode of each = 2 modes of metric [x, y, yaw, v, w]
    in the flat plan layout, so the open-loop metrics read them unchanged.
+   ``action_decoder`` swaps the head and ``kv_tokens`` picks the kv features (``flowpilot_step_dst``: ``StepFlowHead``
+   over one ``temporal`` token).
 """
 
 from dataclasses import dataclass
@@ -116,6 +118,8 @@ class FlowPilotDST(nn.Module):
         input_norm=False,
         context=None,
         temporal_reg_weight=0.0,
+        action_decoder=None,
+        kv_tokens=("global", "patch", "route", "goal", "temporal"),
     ):
         super().__init__()
         self.pair_encoder = (  # frame_encoder: a module with PairEncoder's interface, e.g. DuneEncoder
@@ -128,10 +132,13 @@ class FlowPilotDST(nn.Module):
             self.global_in = nn.Sequential(nn.Linear(c, dim), nn.LayerNorm(dim))
             self.route_in = nn.Sequential(nn.Linear(r, dim), nn.LayerNorm(dim))
         self.temporal_encoder = TemporalFusion(2 * dim if input_norm else c + r, dim, seq_len, **dict(temporal or {}))
-        self.goal = nn.Sequential(nn.Linear(3, dim), nn.GELU(), nn.Linear(dim, dim))
-        self.no_goal = nn.Parameter(torch.randn(dim) * 0.02)
+        self.kv_tokens = tuple(kv_tokens)  # the per-frame features the DiT reads, e.g. [temporal] = one token
+        if "goal" in self.kv_tokens:
+            self.goal = nn.Sequential(nn.Linear(3, dim), nn.GELU(), nn.Linear(dim, dim))
+            self.no_goal = nn.Parameter(torch.randn(dim) * 0.02)
+        widths = {"global": c, "patch": c, "route": r, "goal": dim, "temporal": dim}
         self.tokens = FeatureTokens(
-            {"global": c, "patch": c, "route": r, "goal": dim, "temporal": dim},
+            {name: widths[name] for name in self.kv_tokens},
             dim,
             seq_len,
             num_embodiments if embodiment_token else None,
@@ -143,7 +150,9 @@ class FlowPilotDST(nn.Module):
             )
             for _ in range(ctx["num_layers"])
         )
-        self.action_decoder = AnchorFlowHead(dim, **dict(head or {}))
+        self.action_decoder = (  # action_decoder: a partial taking dim with AnchorFlowHead's interface, e.g. StepFlowHead
+            AnchorFlowHead(dim, **dict(head or {})) if action_decoder is None else action_decoder(dim)
+        )
         self.num_embodiments, self.goal_mask_p, self.speed_weight = num_embodiments, goal_mask_p, speed_weight
         self.temporal_reg_weight = temporal_reg_weight  # aux: one plan regressed from the temporal feature, 0 = off
         num_pts = self.action_decoder.num_pts
@@ -183,8 +192,8 @@ class FlowPilotDST(nn.Module):
         def rows(value):
             return value.flatten(0, 1)[idx]
 
-        goal_token = self.no_goal.expand(len(idx), -1)
-        if goal is not None:
+        goal_token = self.no_goal.expand(len(idx), -1) if "goal" in self.kv_tokens else None
+        if goal is not None and goal_token is not None:
             encoded = self.goal(rows(goal) * goal.new_tensor([0.01, 1.0, 1.0]))
             hidden = (
                 torch.rand(b, device=device) < self.goal_mask_p
@@ -199,7 +208,11 @@ class FlowPilotDST(nn.Module):
             "goal": goal_token,
             "temporal": rows(temporal),
         }
-        kv = self.tokens(feats, torch.arange(t, device=device).repeat(b)[idx], embodiment_id.repeat_interleave(t)[idx])
+        kv = self.tokens(
+            {name: feats[name] for name in self.kv_tokens},
+            torch.arange(t, device=device).repeat(b)[idx],
+            embodiment_id.repeat_interleave(t)[idx],
+        )
         for layer in self.context:
             kv = layer(kv)
         ego_vw, bounds = rows(ego)[:, :2].float(), action_bounds.repeat_interleave(t, 0)[idx].float()

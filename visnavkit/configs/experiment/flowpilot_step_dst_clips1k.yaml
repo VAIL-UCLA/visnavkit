@@ -1,0 +1,16 @@
+# @package _global_
+# FlowPilot-Step-DST on clips1k: flowpilot_dst_clips1k (dim 256, 2 temporal layers, grad clip 5) with the
+# model/flowpilot_step_dst.yaml pipeline. No anchors needed; the aux temporal regression is off.
+defaults:
+  - flowpilot_dst_clips1k
+  - override /model: flowpilot_step_dst
+  - _self_
+
+exp_name: flowpilot_step_dst_clips1k
+
+model:
+  temporal_reg_weight: 0.0
+
+dataset:
+  train_loader:
+    p_crosswalk_to_sidewalk: 0.35  # route map: crosswalk -> sidewalk w.p. 0.35 per window (train only)

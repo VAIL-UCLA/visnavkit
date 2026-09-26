@@ -114,7 +114,8 @@ def export_dst(cfg, output, *, checkpoint=None, batch_size=1, top_k=6, opset=17,
     options = ort.SessionOptions()
     options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_DISABLE_ALL
     session = ort.InferenceSession(str(output), sess_options=options, providers=["CPUExecutionProvider"])
-    feeds = {name: value.numpy() for name, value in zip(INPUTS, inputs)}
+    used = {i.name for i in session.get_inputs()}  # the exporter prunes an unused input, e.g. goal without a goal token
+    feeds = {name: value.numpy() for name, value in zip(INPUTS, inputs) if name in used}
     observed = session.run(list(OUTPUTS), feeds)
     parity = {}
     for name, expected, actual in zip(OUTPUTS, reference, observed):
@@ -136,7 +137,7 @@ def export_dst(cfg, output, *, checkpoint=None, batch_size=1, top_k=6, opset=17,
         "target_times_s": target_times(cfg).tolist(),
         "top_k": top_k,
         "denoising_steps": model.action_decoder.sample_steps,
-        "num_anchors": int(model.action_decoder.anchors.shape[0]),
+        "num_anchors": int(getattr(model.action_decoder, "anchors", torch.empty(0)).shape[0]),  # 0: no anchors
         "parameters_total": sum(p.numel() for p in model.parameters()),
         "parity_max_abs_error": parity,
     }

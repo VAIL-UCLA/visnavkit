@@ -127,6 +127,7 @@ class PoseWindowDataset(Dataset):
     offset moves ``camera``'s cx, cy instead.
     ``p_hflip`` mirrors frames, route patches, y, yaw, yaw rate and the goal; clips whose path contains
     a ``no_flip`` substring are never mirrored (driving corpora keep their side of the road).
+    ``p_crosswalk_to_sidewalk``: w.p. this per window, the route patches' crosswalk cells (2) become sidewalk (1).
     ``shuffle`` belongs to the loader.
     """
 
@@ -154,6 +155,7 @@ class PoseWindowDataset(Dataset):
         principal_point_calibration=False,
         p_hflip=0.0,
         no_flip=(),
+        p_crosswalk_to_sidewalk=0.0,
         shuffle=True,
     ):
         self.data_root = Path(data_root)
@@ -193,6 +195,7 @@ class PoseWindowDataset(Dataset):
             raise ValueError("camera / principal_point_calibration need frame_wh (the camera is scaled to it)")
         self.p_hflip = p_hflip
         self.no_flip = tuple(no_flip or ())
+        self.p_crosswalk_to_sidewalk = p_crosswalk_to_sidewalk
         if self.frames:
             from torchcodec.decoders import VideoDecoder  # only the frame path needs a decoder
 
@@ -295,6 +298,12 @@ class PoseWindowDataset(Dataset):
                 route = np.ascontiguousarray(route[..., ::-1])
             if camera is not None:
                 camera[2] = wh[0] - camera[2]  # mirroring the image mirrors cx
+        if (
+            route is not None
+            and self.p_crosswalk_to_sidewalk > 0
+            and bool(torch.rand(1) < self.p_crosswalk_to_sidewalk)
+        ):
+            route = np.where(route == 2, np.float32(1), route)
         if goal is not None and self.goal_type == "point":
             goal = point_goal_from_local(goal)
 
