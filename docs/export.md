@@ -66,6 +66,16 @@ fp32 passes on every output. Random weights amplify float noise, so fp16 and bf1
 tolerance on some outputs there; the smoke reports parity without enforcing it. Trained weights
 are the test that counts: run the check on the checkpoint before deploying a low precision.
 
+Trained weights, the model zoo's `flowpilot-dst-small` checkpoint, same machine:
+
+| precision | engine | max abs error: modes / probs / speed | top plan endpoint | check |
+| --- | --- | --- | --- | --- |
+| `fp32` | 12.8 ms | 3e-6 / 9e-6 / 3e-6 | 0.000 m | PASS |
+| `fp16` | 3.7 ms | 6e-3 / 5e-3 / 4e-4 | 0.004 m | PASS |
+| `bf16` | 15.6 ms | 0.87 (plan 6 swapped; plans 1 to 5 within 4e-2) / 3e-2 / 9e-3 | 0.034 m | FAIL |
+
+fp16 is the precision to deploy for this model: 3.5 times faster than fp32 at 4 mm on the endpoint.
+
 A ranked output can fail the elementwise comparison while the decision agrees: when the last
 returned plan and the first dropped one are nearly tied, a lower precision returns the other of
 the two. The `decision` line tells the two cases apart, since it compares the top plan only.
