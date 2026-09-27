@@ -66,6 +66,10 @@ fp32 passes on every output. Random weights amplify float noise, so fp16 and bf1
 tolerance on some outputs there; the smoke reports parity without enforcing it. Trained weights
 are the test that counts: run the check on the checkpoint before deploying a low precision.
 
+A ranked output can fail the elementwise comparison while the decision agrees: when the last
+returned plan and the first dropped one are nearly tied, a lower precision returns the other of
+the two. The `decision` line tells the two cases apart, since it compares the top plan only.
+
 ## A new model
 
 Two methods on the model, nothing in `visnavkit/export/`:
