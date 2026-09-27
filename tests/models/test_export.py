@@ -157,7 +157,7 @@ def test_fp16_export_keeps_fp32_io_and_stays_within_its_tolerance(tmp_path):
     assert onnx_precision(onnx.load(str(path)))[0] == "fp16"
     report = check_export(pth=str(path.with_suffix(".pth")), onnx_path=str(path), iterations=0)
     assert report["ok"] and report["artifacts"]["onnx"]["precision"] == "fp16", report
-    assert report["artifacts"]["onnx"]["tolerance"] == {"rtol": 1e-2, "atol": 2e-3}
+    assert report["artifacts"]["onnx"]["tolerance"] == {"rtol": 1e-2, "atol": 1e-2}
 
 
 def test_check_runs_the_graph_unoptimized_when_the_optimizer_fails(tmp_path, monkeypatch):
@@ -177,6 +177,19 @@ def test_check_runs_the_graph_unoptimized_when_the_optimizer_fails(tmp_path, mon
     monkeypatch.setattr(check, "onnx_session", session)
     report = check_export(pth=str(path.with_suffix(".pth")), onnx_path=str(path), iterations=0)
     assert report["ok"] and levels == [True, False], report
+
+
+def test_a_strict_export_fails_after_writing_every_file(tmp_path, monkeypatch):
+    from visnavkit.export import artifacts
+
+    torch.set_num_threads(1)
+    monkeypatch.setattr(artifacts, "tolerance", lambda precision: (0.0, 0.0))
+    path = tmp_path / "policy.onnx"
+    with pytest.raises(AssertionError, match="parity exceeded"):
+        export_onnx(_cfg(*REGRESSION, "strict=true"), path, precision="fp16")
+    meta = json.loads(path.with_suffix(".metadata.json").read_text())
+    assert not meta["parity_pass"] and meta["onnx_sha256"] == sha256_file(path)
+    assert path.with_suffix(".pth").exists() and path.with_suffix(".inputs.npz").exists()
 
 
 def test_bf16_export_stores_bf16_weights_behind_fp32_io(tmp_path):
@@ -199,7 +212,7 @@ def test_bf16_bits_round_to_nearest_and_precisions_are_named():
     assert decoded[0] == 1.0 and decoded[1] == -2.5
     with pytest.raises(ValueError, match="precision='int8'"):
         check_precision("int8")
-    assert tolerance("bf16") == (2e-2, 1e-2) and tolerance("fp16", atol=1e-3) == (1e-2, 1e-3)
+    assert tolerance("bf16") == (5e-2, 3e-2) and tolerance("fp16", atol=1e-3) == (1e-2, 1e-3)
 
 
 def test_compare_outputs_applies_the_allclose_rule():
