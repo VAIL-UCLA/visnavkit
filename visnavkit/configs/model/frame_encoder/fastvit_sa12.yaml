@@ -2,3 +2,5 @@
 _target_: visnavkit.models.vision.frame_encoder.FrameEncoder
 backbone_name: fastvit_sa12
 pretrained: true
+weights: null  # a Lightning ckpt: its model.frame_encoder.backbone.* initialise the backbone (e.g. an earlier flow_matching_policy run)
+freeze: false  # true: backbone fixed (eval mode) + a trainable identity-init Linear adapter
