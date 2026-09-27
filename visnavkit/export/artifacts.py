@@ -180,10 +180,8 @@ def finalize_export(
     errors = {name: item["max_abs"] for name, item in report.items()}
     failed = [name for name, item in report.items() if not item["pass"]]
     summary = ", ".join(f"{name}={error:.3g}" for name, error in errors.items())
-    if failed and (bool(checkpoint) if strict is None else strict):
-        raise AssertionError(f"PyTorch/ONNX parity exceeded rtol {rtol}, atol {atol} for {failed}: {summary}")
     if failed:
-        logger.warning(f"Parity tolerance exceeded for {failed} ({summary}); not enforced")
+        logger.warning(f"Parity tolerance exceeded for {failed} ({summary})")
     logger.info(f"Nonzero-input PyTorch/ONNX parity ({checked} graph, rtol {rtol}, atol {atol}): {summary}")
 
     np.savez(output.with_suffix(".inputs.npz"), **feeds)
@@ -212,6 +210,7 @@ def finalize_export(
         "parameters_total": sum(p.numel() for p in model.parameters()),
         "parity_max_abs_error": errors,
         "parity_precision": checked,
+        "parity_pass": not failed,
         "parity_tolerance": {"rtol": rtol, "atol": atol},
         "decision": label,
         "seed": seed,
@@ -219,6 +218,8 @@ def finalize_export(
     }
     write_metadata(output.with_suffix(".metadata.json"), meta)
     print_export_summary(meta, lines)
+    if failed and (bool(checkpoint) if strict is None else strict):  # after the sidecars: nothing is half-written
+        raise AssertionError(f"PyTorch/ONNX parity exceeded rtol {rtol}, atol {atol} for {failed}: {summary}")
     return meta
 
 
@@ -242,7 +243,8 @@ def print_export_summary(meta, lines):
     print(
         "parity  : "
         + ", ".join(f"{name} {error:.3g}" for name, error in meta["parity_max_abs_error"].items())
-        + f" max abs error vs PyTorch ({meta['parity_precision']} graph, rtol {tol['rtol']}, atol {tol['atol']})"
+        + f" max abs error vs PyTorch ({meta['parity_precision']} graph, rtol {tol['rtol']}, atol {tol['atol']}):"
+        + (" PASS" if meta["parity_pass"] else " FAIL")
     )
     print("=" * 40 + " SANITY CHECK " + "=" * 40)
     print("\n".join(lines))

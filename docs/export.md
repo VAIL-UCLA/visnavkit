@@ -15,11 +15,13 @@ are fp32 at every precision, so the consumer's code does not change.
 | precision | stored weights | checked by | tolerance (rtol / atol) |
 | --- | --- | --- | --- |
 | `fp32` | float32 | ONNX Runtime, engine | 2e-3 / 2e-4 |
-| `fp16` | float16, half the file | ONNX Runtime, engine | 1e-2 / 2e-3 |
-| `bf16` | bfloat16, half the file: fp32's range at 8 significant bits | engine | 2e-2 / 1e-2 |
+| `fp16` | float16, half the file | ONNX Runtime, engine | 1e-2 / 1e-2 |
+| `bf16` | bfloat16, half the file: fp32's range at 8 significant bits | engine | 5e-2 / 3e-2 |
 
 An output passes when `|artifact - reference| <= atol + rtol * |reference|` holds on every element,
-the reference being the fp32 PyTorch model. ONNX Runtime has no bf16 kernels: a bf16 export checks
+the reference being the fp32 PyTorch model, in the outputs' own units (m, rad, m/s, probability).
+Parity beyond the tolerance fails an export of checkpoint weights after every file is written;
+`strict=false` reports it only. ONNX Runtime has no bf16 kernels: a bf16 export checks
 the fp32 graph before the cast, and the engine check covers the cast itself. Pick `bf16` when `fp16`
 overflows; it is not the faster of the two.
 

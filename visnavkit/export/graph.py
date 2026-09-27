@@ -27,7 +27,16 @@ from visnavkit.models.action.outputs import parse_plan_output as parse_tensor_pl
 from visnavkit.utils.logger import get_logger
 
 logger = get_logger(__name__)
-EXPORT_OPTIONS = ("checkpoint", "output", "onnx_opset_version", "precision", "batch_size", "export_heads", "graph")
+EXPORT_OPTIONS = (
+    "checkpoint",
+    "output",
+    "onnx_opset_version",
+    "precision",
+    "batch_size",
+    "strict",
+    "export_heads",
+    "graph",
+)
 
 
 class _RMSNorm(nn.Module):
@@ -147,12 +156,15 @@ def export_onnx(
         cfg.setdefault("onnx_opset_version", 14)
         cfg.setdefault("precision", "fp16")
         cfg.setdefault("batch_size", 1)
+        cfg.setdefault("strict", None)
         cfg.setdefault("export_heads", [])
         cfg.setdefault("graph", {})
         if precision is not None:
             cfg.precision = precision
         if batch_size is not None:
             cfg.batch_size = batch_size
+        if strict is not None:
+            cfg.strict = strict
         if opset is not None:
             cfg.onnx_opset_version = opset
         if export_heads is not None:
@@ -207,5 +219,5 @@ def export_onnx(
         precision=precision,
         opset=opset,
         seed=seed,
-        strict=strict,
+        strict=cfg.strict,
     )

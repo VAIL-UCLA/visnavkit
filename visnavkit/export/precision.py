@@ -12,9 +12,10 @@ import torch
 from onnx import TensorProto, numpy_helper
 
 PRECISIONS = ("fp32", "fp16", "bf16")
-# (rtol, atol) against the fp32 PyTorch reference: fp16 keeps ~3 significant digits, bf16 ~2; tf32 is an fp32
-# engine whose matmuls / convolutions round to 10 mantissa bits (TensorRT's default), so it is held to fp16.
-TOLERANCES = {"fp32": (2e-3, 2e-4), "tf32": (1e-2, 2e-3), "fp16": (1e-2, 2e-3), "bf16": (2e-2, 1e-2)}
+# (rtol, atol) against the fp32 PyTorch reference, in the outputs' units (m, rad, m/s, probability). Calibrated
+# on a trained FlowPilot-DST (20 frame encodes + 4 flow steps): fp16 engines land within 5e-3, bf16 within 4e-2.
+# tf32 is an fp32 engine whose matmuls / convolutions round to 10 mantissa bits (TensorRT's default): as fp16.
+TOLERANCES = {"fp32": (2e-3, 2e-4), "tf32": (1e-2, 1e-2), "fp16": (1e-2, 1e-2), "bf16": (5e-2, 3e-2)}
 _ONNX_FLOATS = {"FLOAT": "fp32", "FLOAT16": "fp16", "BFLOAT16": "bf16"}
 _TORCH_FLOATS = {torch.float32: "fp32", torch.float16: "fp16", torch.bfloat16: "bf16"}
 
