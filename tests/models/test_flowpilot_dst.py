@@ -261,12 +261,9 @@ def test_window_export_matches_onnx_runtime_and_the_check_replays_it(tmp_path):
         cfg = compose(config_name="train", overrides=[*SMALL, "common.crop_wh=[64,32]", "common.downscale_factor=1"])
     disable_pretrained_downloads(cfg.model)
     path = tmp_path / "flowpilot_dst.onnx"
-    meta = export_onnx(cfg, path, precision="fp32", device="cpu")
-    assert meta["output_shapes"] == {
-        "modes": [1, 4, 8, 5],
-        "probs": [1, 4],
-        "speed": [1, 1],
-    }  # top-k clamps to the 4 anchors
+    meta = export_onnx(cfg, path, precision="fp32", device="cpu", graph={"top_k": 3})
+    assert meta["output_shapes"] == {"modes": [1, 3, 8, 5], "probs": [1, 3], "speed": [1, 1]}
+    assert meta["config"]["graph"] == {"top_k": 3}  # the check rebuilds the same graph from the .pth's config
     assert meta["input_shapes"]["route_patch"] == [1, 4, 80, 80]
     report = check_export(pth=str(path.with_suffix(".pth")), onnx_path=str(path), iterations=0)
     assert report["ok"] and report["artifacts"]["onnx"]["outputs"]["modes"]["pass"], report

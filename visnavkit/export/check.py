@@ -24,7 +24,7 @@ from visnavkit.export.artifacts import (
     run_onnx,
     size_mb,
 )
-from visnavkit.export.graph import prepare_graph
+from visnavkit.export.graph import graph_options, prepare_graph
 from visnavkit.export.precision import model_precision, onnx_precision, tolerance
 from visnavkit.utils.logger import get_logger
 
@@ -108,8 +108,8 @@ def check_export(
 
     reference_kind = "checkpoint" if checkpoint else "pth"
     model, cfg = load_model(checkpoint or pth)
-    export_heads = list(cfg.get("export_heads") or (onnx_meta or {}).get("config", {}).get("export_heads") or [])
-    options = dict(batch_size=batch_size, seed=seed, export_heads=export_heads, device="cpu")
+    graph = graph_options(cfg, (onnx_meta or {}).get("config"))
+    options = dict(batch_size=batch_size, seed=seed, device="cpu", **graph)
     wrapper, generated, input_names, output_names = prepare_graph(model, cfg, **options)
 
     feeds_source = Path(inputs) if inputs else Path(onnx_path).with_suffix(".inputs.npz") if onnx_path else None

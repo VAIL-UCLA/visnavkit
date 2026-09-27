@@ -509,12 +509,12 @@ class DSTOutput(BaseOutput):
 class _ExportDST(nn.Module):
     """Positional ``deploy`` wrapper for the tracer."""
 
-    def __init__(self, model):
+    def __init__(self, model, top_k):
         super().__init__()
-        self.model = model
+        self.model, self.top_k = model, top_k
 
     def forward(self, vision, route_patch, goal, ego, action_bounds):
-        return self.model.deploy(vision, goal, route_patch, ego, action_bounds)
+        return self.model.deploy(vision, goal, route_patch, ego, action_bounds, self.top_k)
 
 
 class FlowPilotDST(nn.Module):
@@ -655,10 +655,10 @@ class FlowPilotDST(nn.Module):
         modes, prob = self.action_decoder.top_modes(kv[rows], bounds[rows], ego_vw[rows], k)
         return modes, prob, speed[:, -1]
 
-    def export_graph(self, cfg, batch_size=1, **_):
+    def export_graph(self, cfg, batch_size=1, top_k=6, **_):
         """``(wrapper, inputs, input_names, output_names)`` of the window graph: the ``seq_length`` window in
         (every slot holds a frame and a route patch; pad a short history by repeating the oldest frame), the
-        current frame's top-k plans out. ``docs/flowpilot_dst_onnx.md`` documents the contract."""
+        current frame's ``top_k`` plans out. ``docs/flowpilot_dst_onnx.md`` documents the contract."""
         b, t = batch_size, int(cfg.common.seq_length)
         w, h = (int(v // cfg.common.downscale_factor) for v in cfg.common.crop_wh)
         device, route = next(self.parameters()).device, self.route_encoder
@@ -671,7 +671,7 @@ class FlowPilotDST(nn.Module):
             bounds.expand(b, 2, 5),
         )
         names = ["vision", "route_patch", "goal", "ego", "action_bounds"], ["modes", "probs", "speed"]
-        return _ExportDST(self).eval(), inputs, *names
+        return _ExportDST(self, top_k).eval(), inputs, *names
 
     def decision(self, outputs):
         """The top plan of NumPy ``outputs`` (by name): a label, its endpoint (x, y) in metres and the SANITY

@@ -1,7 +1,7 @@
 """A model's deployment ONNX graph at a precision, with its ``.pth`` / ``.metadata.json`` / ``.inputs.npz`` sidecars.
 
 The model owns its graph: ``export_graph(cfg, batch_size, **options)`` returns the traced wrapper, its example
-inputs and the io names; ``decision(outputs)`` reads the newest decision back from NumPy outputs. Shapes are
+inputs and the io names (``options``: the export config's ``export_heads`` and its free ``graph`` dict); ``decision(outputs)`` reads the newest decision back from NumPy outputs. Shapes are
 fixed at export (``batch_size``): TensorRT builds them without a profile.
 """
 
@@ -27,7 +27,7 @@ from visnavkit.models.action.outputs import parse_plan_output as parse_tensor_pl
 from visnavkit.utils.logger import get_logger
 
 logger = get_logger(__name__)
-EXPORT_OPTIONS = ("checkpoint", "output", "onnx_opset_version", "precision", "batch_size", "export_heads")
+EXPORT_OPTIONS = ("checkpoint", "output", "onnx_opset_version", "precision", "batch_size", "export_heads", "graph")
 
 
 class _RMSNorm(nn.Module):
@@ -94,6 +94,13 @@ def parse_plan_output(output, M, num_pts, pose_width):
     )
 
 
+def graph_options(cfg, fallback=None):
+    """The model-specific ``export_graph`` options of an export config: ``export_heads`` and the ``graph`` dict.
+    A checkpoint's config has neither, so ``fallback`` (the ONNX metadata's config) serves it."""
+    source = cfg if "graph" in cfg or "export_heads" in cfg else fallback or {}
+    return {"export_heads": list(source.get("export_heads") or []), **dict(source.get("graph") or {})}
+
+
 def prepare_graph(model, cfg, *, batch_size=1, seed=0, device=None, **options):
     """``(wrapper, inputs, input_names, output_names)``: the model's own ``export_graph`` on a folded copy placed
     on ``device`` (default: CUDA when usable), with seeded example inputs. ``model`` keeps its structure."""
@@ -121,6 +128,7 @@ def export_onnx(
     batch_size=None,
     opset=None,
     export_heads=None,
+    graph=None,
     seed=0,
     strict=None,
     device=None,
@@ -140,6 +148,7 @@ def export_onnx(
         cfg.setdefault("precision", "fp16")
         cfg.setdefault("batch_size", 1)
         cfg.setdefault("export_heads", [])
+        cfg.setdefault("graph", {})
         if precision is not None:
             cfg.precision = precision
         if batch_size is not None:
@@ -148,13 +157,15 @@ def export_onnx(
             cfg.onnx_opset_version = opset
         if export_heads is not None:
             cfg.export_heads = list(export_heads)
+        if graph is not None:
+            cfg.graph = dict(graph)
     model, cfg = load(cfg)
     precision = check_precision(str(cfg.precision))
     opset = int(cfg.onnx_opset_version)
     output = Path(output)
     output.parent.mkdir(parents=True, exist_ok=True)
     wrapper, inputs, input_names, output_names = prepare_graph(
-        model, cfg, batch_size=int(cfg.batch_size), seed=seed, export_heads=list(cfg.export_heads), device=device
+        model, cfg, batch_size=int(cfg.batch_size), seed=seed, device=device, **graph_options(cfg)
     )
     logger.info("Export inputs: " + ", ".join(f"{name}{tuple(t.shape)}" for name, t in zip(input_names, inputs)))
 

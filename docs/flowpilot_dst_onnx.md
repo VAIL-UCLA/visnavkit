@@ -10,7 +10,8 @@ uv run visnavkit-export \
 ```
 The export writes `flowpilot_dst.onnx`, `.pth` (the weights and config, Lightning-free), `.metadata.json`
 (shapes, parity, checkpoint hash, the config) and `.inputs.npz` (the traced sample inputs, for a first
-smoke run). `precision=fp16` or `bf16` halves the weights, io stays fp32; opset 14.
+smoke run). `precision=fp16` or `bf16` halves the weights, io stays fp32; opset 14. `+graph.top_k=3`
+sets the plans returned per call (default 6).
 
 ## Inputs
 
