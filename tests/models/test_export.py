@@ -10,7 +10,7 @@ import torch
 from hydra import compose, initialize_config_module
 
 from visnavkit.benchmark.export import sha256_file
-from visnavkit.export.artifacts import compare_outputs
+from visnavkit.export.artifacts import compare_outputs, onnx_session
 from visnavkit.export.check import check_export
 from visnavkit.export.graph import export_onnx, parse_plan_output
 from visnavkit.export.precision import bf16_bits, check_precision, onnx_precision, tolerance
@@ -158,6 +158,25 @@ def test_fp16_export_keeps_fp32_io_and_stays_within_its_tolerance(tmp_path):
     report = check_export(pth=str(path.with_suffix(".pth")), onnx_path=str(path), iterations=0)
     assert report["ok"] and report["artifacts"]["onnx"]["precision"] == "fp16", report
     assert report["artifacts"]["onnx"]["tolerance"] == {"rtol": 1e-2, "atol": 2e-3}
+
+
+def test_check_runs_the_graph_unoptimized_when_the_optimizer_fails(tmp_path, monkeypatch):
+    from visnavkit.export import check
+
+    torch.set_num_threads(1)
+    path = tmp_path / "policy.onnx"
+    export_onnx(_cfg(*REGRESSION), path, precision="fp16")
+    levels = []
+
+    def session(graph, provider="CPUExecutionProvider", optimize=True):
+        levels.append(optimize)
+        if optimize:
+            raise RuntimeError("Exception during initialization")
+        return onnx_session(graph, provider, optimize=False)
+
+    monkeypatch.setattr(check, "onnx_session", session)
+    report = check_export(pth=str(path.with_suffix(".pth")), onnx_path=str(path), iterations=0)
+    assert report["ok"] and levels == [True, False], report
 
 
 def test_bf16_export_stores_bf16_weights_behind_fp32_io(tmp_path):

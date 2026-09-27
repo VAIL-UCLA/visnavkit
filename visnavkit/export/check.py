@@ -47,7 +47,11 @@ def _torch_runner(wrapper, input_names, output_names, device):
 
 
 def _onnx_runner(path, provider, output_names):
-    session = onnx_session(path, provider)
+    try:
+        session = onnx_session(path, provider)
+    except Exception as error:  # ONNX Runtime's graph optimizer fails on some fp16 graphs
+        logger.warning(f"{path} runs unoptimized in ONNX Runtime: {str(error).splitlines()[0]}")
+        session = onnx_session(path, provider, optimize=False)
     graph_outputs = [node.name for node in session.get_outputs()]
     missing = [name for name in output_names if name not in graph_outputs]
     if missing:
