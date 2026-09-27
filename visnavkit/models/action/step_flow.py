@@ -19,7 +19,7 @@ from visnavkit.models.layers.embeddings import SinusoidalTimeEmbedding
 
 
 class StepFlowHead(nn.Module):
-    pose_size = 5
+    pose_size, uses_noise = 5, True
     norm, metric, ego_cond, sample_time = (
         AnchorFlowHead.norm,
         AnchorFlowHead.metric,
@@ -65,7 +65,8 @@ class StepFlowHead(nn.Module):
         t = self.sample_time(len(kv), kv.device)
         x_t = (1 - t)[:, None, None] * noise + t[:, None, None] * x1
         ego = self.ego(self.ego_cond(ego_vw, bounds)).to(kv.dtype)
-        return F.mse_loss(self.velocity(x_t, t, kv, ego).float(), x1 - noise, reduction="none").sum(-1).mean()
+        v = F.mse_loss(self.velocity(x_t, t, kv, ego).float(), x1 - noise, reduction="none").sum(-1).mean()
+        return dict(total=v, reg=v)
 
     @torch.no_grad()
     def sample(self, kv, bounds, ego_vw, noise=None):

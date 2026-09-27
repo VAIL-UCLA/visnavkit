@@ -1,0 +1,11 @@
+# FlowMatchingPolicy's StepFlowHead (visnavkit.models.action.step_flow): flow matching from noise, one query per plan
+# step (+ step position + ego [v, w]).
+_target_: visnavkit.models.action.step_flow.StepFlowHead
+_partial_: true  # the policy passes dim
+num_pts: ${plan_len_points}
+num_layers: 4
+num_heads: 8
+dropout: 0.1
+ego_mask_p: 0.9  # training: hide each ego channel (v, w) w.p. 0.9
+sample_steps: 4
+num_samples: 1  # eval / export randn: N(0, I) samples per decision (zero noise is always 1 plan)

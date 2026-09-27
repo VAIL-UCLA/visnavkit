@@ -1,0 +1,8 @@
+# @package _global_
+# flow_matching_policy_clips1k with the FlowBridge version: anchor -> trajectory flow matching (FlowBridgeHead) head (model/flow_matching_policy_bridge.yaml).
+defaults:
+  - flow_matching_policy_clips1k
+  - override /model: flow_matching_policy_bridge
+  - _self_
+
+exp_name: flow_matching_policy_bridge_clips1k

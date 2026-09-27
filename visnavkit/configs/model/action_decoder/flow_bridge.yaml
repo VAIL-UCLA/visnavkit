@@ -1,0 +1,11 @@
+# FlowMatchingPolicy's FlowBridgeHead (visnavkit.models.action.anchor_heads): flow matching from the anchor to the trajectory (BridgeDrive-style bridge), Euler from the anchors.
+# One mode token per k-means anchor; the top-score mode is the plan (1 per decision, deterministic).
+_target_: visnavkit.models.action.anchor_heads.FlowBridgeHead
+_partial_: true  # the policy passes dim
+anchors_path: null  # (K, plan_len_points, 2) normalised per-step dx, dy in [0, 1] (.npy); null = random (tests only)
+num_pts: ${plan_len_points}
+num_layers: 4
+num_heads: 8
+dropout: 0.1
+ego_mask_p: 0.9  # training: hide each ego channel (v, w) w.p. 0.9
+sample_steps: 4  # Euler steps from the anchors

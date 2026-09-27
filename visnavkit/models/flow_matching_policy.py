@@ -5,8 +5,10 @@ route VAE latent; each Linear -> LayerNorm to D, concatenated -> ``TemporalFusio
 slots, random past-slot drop ``temporal.mask_p`` in training). The temporal feature (Linear + slot embedding) is the one
 kv token of ``StepFlowHead`` (flow matching from N(0, I), one query per plan step + step position + ego [v, w]
 embedding). Every slot that holds a frame is decoded and supervised; ``deploy`` decides for the last slot. No goal
-input, no speed head. Eval: ``plan.plans`` is the zero-noise plan (1 per slot) and ``plan.variants["randn"]`` the
-``num_samples`` N(0, I) samples; LitModel logs metrics for both.
+input, no speed head. Eval: ``plan.plans`` is the deterministic plan (1 per slot: zero noise, or the top anchor of the
+anchor heads) and, for a head that ``uses_noise``, ``plan.variants["randn"]`` the ``num_samples`` N(0, I) samples;
+LitModel logs metrics for both. ``action_decoder``: ``StepFlowHead``, or ``S2EHead`` / ``FlowBridgeHead``
+(``models/action/anchor_heads.py``).
 
 Batch keys: ``vision`` (B, T, 3, H, W) in [0, 1] + ``frame_mask`` (B, T), ``route_patch`` (B, T, h, w) class ids +
 ``route_mask``, ``ego`` (B, T, >= 2) starting with [v, w], ``action_bounds`` (B, 2, 5); targets ``future_poses``
@@ -85,12 +87,15 @@ class FlowMatchingPolicy(nn.Module):
             vision, frame_mask, route_patch, route_mask, ego, action_bounds
         )
         head, plans, variants = self.action_decoder, None, None
-        if not self.training:  # zero noise -> 1 plan; randn -> num_samples plans
-            zero = head.pack(head.sample(kv, bounds, ego_vw))
-            randn = head.pack(head.sample(kv, bounds, ego_vw, head.randn(len(kv), kv.device)))
-            plans, randn_plans = (vision.new_zeros(b * t, p.shape[1]) for p in (zero, randn))
-            plans[idx], randn_plans[idx] = zero.to(plans.dtype), randn.to(plans.dtype)
-            variants = {"randn": randn_plans}
+        if not self.training:  # the deterministic plan; + randn -> num_samples plans for a head that uses noise
+            decoded = {"": head.sample(kv, bounds, ego_vw)}
+            if head.uses_noise:
+                decoded["randn"] = head.sample(kv, bounds, ego_vw, head.randn(len(kv), kv.device))
+            for name, modes in decoded.items():
+                flat = head.pack(modes)
+                rows = vision.new_zeros(b * t, flat.shape[1])
+                rows[idx] = flat.to(rows.dtype)
+                plans, variants = (rows, variants) if not name else (plans, {**(variants or {}), name: rows})
         return FlowOutput(
             plan=FlowPlan(
                 plans=plans,
@@ -119,6 +124,8 @@ class FlowMatchingPolicy(nn.Module):
         ``goal`` are unused (the exporter prunes goal)."""
         b, t = vision.shape[:2]
         full = torch.ones(b, t, dtype=torch.bool, device=vision.device)
+        if noise is not None and not self.action_decoder.uses_noise:
+            raise ValueError(f"{type(self.action_decoder).__name__} is deterministic: it takes no noise")
         kv, ego_vw, bounds, _, _ = self.encode(vision, full, route_patch, full, ego, action_bounds)
         rows = torch.arange(b, device=vision.device) * t + (t - 1)
         modes = self.action_decoder.sample(kv[rows], bounds[rows], ego_vw[rows], noise)
@@ -142,5 +149,5 @@ class FlowMatchingPolicy(nn.Module):
         actions = targets["action"]["future_poses"][plan.idx].float()  # (N, T, 5) per slot with a frame
         if actions.shape[-1] != 5:
             raise ValueError("FlowMatchingPolicy needs pose_size 5 targets [x, y, yaw, v, w]")
-        loss = self.action_decoder.loss(plan.tokens, actions, plan.bounds, plan.ego_vw)
-        return dict(loss=loss, action_reg=loss.detach()), {}
+        head = self.action_decoder.loss(plan.tokens, actions, plan.bounds, plan.ego_vw)  # {total, reg, ...}
+        return dict(loss=head["total"], **{f"action_{k}": v.detach() for k, v in head.items() if k != "total"}), {}

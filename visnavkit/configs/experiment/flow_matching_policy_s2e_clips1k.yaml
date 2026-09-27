@@ -1,0 +1,8 @@
+# @package _global_
+# flow_matching_policy_clips1k with the S2E version: anchors in, trajectories out (S2EHead) head (model/flow_matching_policy_s2e.yaml).
+defaults:
+  - flow_matching_policy_clips1k
+  - override /model: flow_matching_policy_s2e
+  - _self_
+
+exp_name: flow_matching_policy_s2e_clips1k

@@ -1,0 +1,6 @@
+# FlowMatchingPolicy, S2E version: anchors in, trajectories out (S2EHead); everything before the head is flow_matching_policy's.
+# Pass the anchors: model.action_decoder.anchors_path=<kmeans64.npy>
+defaults:
+  - flow_matching_policy
+  - override action_decoder: s2e_anchor
+  - _self_
