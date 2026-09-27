@@ -1,0 +1,61 @@
+# @package _global_
+# FlowMatchingPolicy on clips1k: 1 s past at 20 Hz slots (frames + ego + route) -> 4 s plans at 20 Hz (80 points).
+# data_root holds action_bounds.json and the clips1k train manifest (grep "/clips1k/" train.txt > train_clips1k.txt).
+# Pass the route VAE: model.route.weights=<route VAE ckpt>
+defaults:
+  - override /dataset: pose
+  - override /model: flow_matching_policy
+  - _self_
+
+exp_name: flow_matching_policy_clips1k
+plan_len_seconds: 4
+plan_len_points: 80
+
+common:
+  seq_length: 20  # x hz 20 = the past second
+  uniform_t_anchors: true  # 80 targets 0.05 s apart
+  crop_wh: [384, 216]  # the decoded frame size
+  downscale_factor: 1
+  ego_features: [speed, yaw_rate]  # the head's ego conditioning reads [v, w]
+
+dataset:
+  batch_size: 64
+  train_loader:
+    file_list: train_clips1k.txt
+    pose_size: 5
+    goal_type: none  # the policy reads no goal
+    frames: true
+    frame_wh: ${common.crop_wh}
+    route_hw: [80, 80]
+    action_bounds: action_bounds.json
+    camera: true  # the plan panels project onto the frame
+    principal_point_calibration: true  # clips1k: recentre each clip's SLAM principal point (train and val)
+    p_crosswalk_to_sidewalk: 0.35  # route map: crosswalk -> sidewalk w.p. 0.35 per window (train only)
+  val_loader:
+    pose_size: 5
+    goal_type: none
+    frames: true
+    frame_wh: ${common.crop_wh}
+    route_hw: [80, 80]
+    action_bounds: action_bounds.json
+    camera: true
+    principal_point_calibration: true
+
+metrics:
+  timesteps_to_compute: [1.0, 2.0, 4.0]
+
+augs:  # train batches on the GPU: color jitter + camera degradations
+  color_jitter: [0.2, 0.2, 0.2, 0.1]
+  p_erase: 0.1
+  p_frame_brightness: 0.3
+  p_blur: 0.1
+  p_noise: 0.1
+  p_jpeg: 0.1
+
+optimizer:
+  max_grad_norm: 5.0  # clip the total grad norm
+
+trainer:
+  logging:
+    log_images_every_n_batches: { train: 2000, val: 2000 }
+    log_images_num_samples: 200

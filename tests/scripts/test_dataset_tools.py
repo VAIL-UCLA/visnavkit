@@ -13,7 +13,7 @@ from hydra import compose, initialize_config_module
 pytest.importorskip("torchcodec")
 
 from visnavkit.data.pose_dataset import PoseWindowDataset
-from visnavkit.models.flowpilot_dst import AnchorFlowHead
+from visnavkit.models.action.anchor_flow import AnchorFlowHead
 from visnavkit.scripts.dataset.actions import cache_actions, load_actions
 from visnavkit.scripts.dataset.anchors import fit_anchors, kmeans
 from visnavkit.scripts.dataset.cache import cache_targets, load_cache

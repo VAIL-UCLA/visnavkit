@@ -1,6 +1,7 @@
 """Action decoders: context (+ goal) tokens -> trajectories in one shared flat layout."""
 
 from .anchor import AnchorDecoder
+from .anchor_flow import AnchorFlowHead
 from .anchors import AnchorSet, arc_anchors
 from .base import BaseActionDecoder
 from .denoisers import DiTDenoiser, MLPDenoiser, UNet1DDenoiser
@@ -16,6 +17,7 @@ __all__ = [
     "ActionNormalizer",
     "ActionSpace",
     "AnchorDecoder",
+    "AnchorFlowHead",
     "AnchorSet",
     "BaseActionDecoder",
     "DDIMScheduler",

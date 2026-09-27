@@ -116,8 +116,8 @@ batch_size)` returns the traced wrapper, example inputs and io names, `decision(
 newest decision back. `NavigationPolicy` traces `predict` with presence-driven inputs — `vision`,
 `feature_buffer`, one `goal` per goal encoder, one per modality key, `noise` — after flipping
 `reduction=none` to `last` and precomputing ViT position embeddings for the export resolution;
-`FlowPilotDST` traces `deploy`, the window in and the current frame's top-k plans out
-([contract](flowpilot_dst_onnx.md)). `export/graph.py` folds the model (FastViT branches,
+the window models (`FlowPilotDST`, `FlowMatchingPolicy`) trace `deploy` through `WindowExport`, the
+window in and the current frame's plans out ([contract](flowpilot_dst_onnx.md)). `export/graph.py` folds the model (FastViT branches,
 Linear-BatchNorm, RMSNorm), traces at fixed shapes with the MHA fast path disabled, casts the
 weights to `precision` (`fp32` | `fp16` | `bf16`, io stays fp32), verifies ONNX Runtime parity and writes
 `.pth` (weights + config), `.metadata.json` and `.inputs.npz` beside the graph. `export/trt.py`

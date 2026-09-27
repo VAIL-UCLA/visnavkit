@@ -71,6 +71,10 @@ Two methods on the model, nothing in `visnavkit/export/`:
 - `export_graph(cfg, batch_size, **options)` returns `(wrapper, inputs, input_names, output_names)`:
   the module to trace, its example inputs and the graph's io names. `options` are the export
   config's `export_heads` and its free `graph` dict, so a model's own option needs no shared
-  config key: `+graph.top_k=3`.
+  config key: `+graph.top_k=3`, `+graph.noise=randn +graph.num_samples=4`.
 - `decision(outputs)` returns `(label, endpoint_xy, lines)` from NumPy outputs by name: what the
   summaries print and the check compares.
+
+Models that decide from a window through `deploy(vision, goal, route_patch, ego, action_bounds, k)`
+inherit both from `WindowExport` (`models/window_export.py`), as FlowPilot-DST and
+FlowMatchingPolicy do.

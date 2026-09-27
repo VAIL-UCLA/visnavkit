@@ -11,17 +11,25 @@
 - ``deep``: the same table ``summary_depth`` levels deep.
 - ``rich``: the rich table ``summary_depth`` levels deep (the ``rich`` extra).
 - ``stages``: one row per policy stage: total / trainable / frozen parameters (``36,614,802 (36.61M)``), share of
-  the model, fp32 size.
+  the model, fp32 size and a clickable ``path:line`` of its source.
 - ``none``: nothing.
+
+``trainer.display.print_config``: true prints the resolved config (the run's hyperparameters) at fit start.
+``trainer.display.batch_summary``: N > 0 prints the first train batch (every key's shape, dtype, range) and its first N
+windows (source clip and frame when the dataset returns ``index``, current-slot ego / goal, plan endpoint).
 """
 
+import inspect
+import os
 import sys
 import time
 from datetime import timedelta
 
+import torch
 from lightning.pytorch.callbacks import Callback, ModelSummary, TQDMProgressBar
 from lightning.pytorch.callbacks.progress.progress_bar import ProgressBar
 from lightning.pytorch.utilities import rank_zero_only
+from omegaconf import OmegaConf
 
 PROGRESS_BARS = ("tqdm", "rich", "lines", "none")
 MODEL_SUMMARIES = ("lightning", "deep", "rich", "stages", "none")
@@ -77,6 +85,17 @@ class LineProgressBar(ProgressBar):
             print(f"[val] epoch {trainer.current_epoch} | {_format_metrics(metrics)}", file=sys.stdout, flush=True)
 
 
+def source(owner, name, module):
+    """Clickable ``path:line``: a visnavkit class's definition, else the line in ``owner.__init__`` that builds
+    ``name`` (a torch ``Sequential`` / ``Linear`` / ``Parameter`` says more there than in torch's source)."""
+    target, line = type(module), None
+    if not target.__module__.startswith("visnavkit"):
+        target = type(owner)
+        lines, start = inspect.getsourcelines(target.__init__)
+        line = next((start + i for i, text in enumerate(lines) if f"self.{name}" in text), start)
+    return f"{os.path.relpath(inspect.getsourcefile(target))}:{line or inspect.getsourcelines(target)[1]}"
+
+
 class StageSummary(Callback):
     """One row per top-level stage of the policy (``pl_module.model``): parameters total / trainable / frozen."""
 
@@ -88,22 +107,77 @@ class StageSummary(Callback):
             params = list(module.parameters())
             total = sum(p.numel() for p in params)
             trainable = sum(p.numel() for p in params if p.requires_grad)
-            rows.append((name, type(module).__name__, total, trainable, total - trainable))
+            rows.append((name, type(module).__name__, total, trainable, total - trainable, source(model, name, module)))
         loose = [p for n, p in model.named_parameters(recurse=False)]  # parameters on the policy itself
         if loose:
             total = sum(p.numel() for p in loose)
-            rows.append(("(own)", type(model).__name__, total, sum(p.numel() for p in loose if p.requires_grad), 0))
+            trainable = sum(p.numel() for p in loose if p.requires_grad)
+            rows.append(("(own)", type(model).__name__, total, trainable, 0, source(model, "__init__", model)))
         grand = sum(r[2] for r in rows) or 1
-        header = f"{'stage':<20} {'type':<22} {'params':>22} {'trainable':>22} {'frozen':>22} {'share':>7} {'fp32':>9}"
+        header = f"{'stage':<20} {'type':<22} {'params':>22} {'trainable':>22} {'frozen':>22} {'share':>7} {'fp32':>9}  source"
         lines = [header, "-" * len(header)]
-        for name, kind, total, trainable, frozen in rows:
+        for name, kind, total, trainable, frozen, src in rows:
             lines.append(
                 f"{name:<20} {kind:<22} {count(total):>22} {count(trainable):>22} {count(frozen):>22} "
-                f"{100 * total / grand:>6.1f}% {total * 4 / 2**20:>7.1f}MB"
+                f"{100 * total / grand:>6.1f}% {total * 4 / 2**20:>7.1f}MB  {src}"
             )
         trainable = sum(r[3] for r in rows)
         lines += ["-" * len(header), f"{'total':<43} {count(grand):>22} {count(trainable):>22} "
                   f"{count(grand - trainable):>22} {100.0:>6.1f}% {grand * 4 / 2**20:>7.1f}MB"]  # fmt: skip
+        print("\n".join(lines), flush=True)
+
+
+class ConfigPrint(Callback):
+    """The resolved run config (``pl_module.cfg``) at fit start."""
+
+    @rank_zero_only
+    def on_fit_start(self, trainer, pl_module):
+        print(OmegaConf.to_yaml(pl_module.cfg, resolve=True), flush=True)
+
+
+def _stats(value):
+    if not hasattr(value, "shape"):
+        return f"{type(value).__name__} x {len(value)}"
+    text = f"{str(tuple(value.shape)):<24} {str(value.dtype).removeprefix('torch.'):<8}"
+    if value.numel() and (value.is_floating_point() or value.dtype == torch.bool):
+        v = value.float()
+        text += f" min {v.min().item():9.3f}  max {v.max().item():9.3f}  mean {v.mean().item():9.3f}"
+    return text
+
+
+class BatchSummary(Callback):
+    """The first train batch: every key, then ``num_samples`` windows (source window, current-slot values)."""
+
+    def __init__(self, num_samples):
+        self.num_samples = num_samples
+
+    @rank_zero_only
+    def on_train_batch_start(self, trainer, pl_module, batch, batch_idx):
+        if trainer.global_step or batch_idx:
+            return
+        width = max(len(k) for k in batch)
+        lines = ["first train batch:"] + [f"  {k:<{width}}  {_stats(v)}" for k, v in batch.items()]
+        windows = getattr(getattr(trainer.train_dataloader, "dataset", None), "windows", None)
+        for i in range(min(self.num_samples, len(batch["vision"]))):
+            line = []
+            if "index" in batch and windows is not None:
+                video_fp, current = windows[int(batch["index"][i])]
+                line.append(f"{video_fp} frame {current}")
+            for key in ("embodiment_id", "frame_mask", "route_mask"):
+                if key in batch:
+                    value = batch[key][i]
+                    line.append(f"{key} {int(value.sum()) if value.dim() else int(value)}")
+            for key in ("ego", "goal"):
+                if key in batch:
+                    line.append(f"{key}[-1] {[round(x, 3) for x in batch[key][i, -1].tolist()]}")
+            if "future_poses" in batch:
+                end = (
+                    batch["future_poses"][i, -1, -1]
+                    if batch["future_poses"].dim() == 4
+                    else batch["future_poses"][i, -1]
+                )
+                line.append(f"plan end {[round(x, 2) for x in end.tolist()]}")
+            lines.append(f"  window {i}: " + " | ".join(line))
         print("\n".join(lines), flush=True)
 
 
@@ -140,6 +214,10 @@ def display_callbacks(display, trainer_kwargs=None):
         callbacks.append(RichModelSummary(max_depth=depth))
     elif summary == "stages":
         callbacks.append(StageSummary())
+    if display.get("print_config"):
+        callbacks.append(ConfigPrint())
+    if display.get("batch_summary"):
+        callbacks.append(BatchSummary(int(display["batch_summary"])))
     if summary in ("stages", "none") and "enable_model_summary" not in trainer_kwargs:
         kwargs["enable_model_summary"] = False
     return callbacks, kwargs

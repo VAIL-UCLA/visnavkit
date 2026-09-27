@@ -30,3 +30,13 @@ class SinusoidalTimeEmbedding(nn.Module):
 
     def forward(self, t: torch.Tensor) -> torch.Tensor:
         return self.mlp(timestep_embedding(t, self.dim))
+
+
+def sincos_2d(h, w, dim, device, dtype):
+    """Fixed 2-D sin-cos positional embedding ``(h w, dim)``, ``dim / 4`` frequencies per axis."""
+    quarter = dim // 4
+    f32 = dict(device=device, dtype=torch.float32)  # float32 throughout: the tracer promotes int arange to float64
+    freq = torch.exp(-math.log(10000.0) * torch.arange(quarter, **f32) / quarter)
+    yy = (torch.arange(h, **f32)[:, None, None] * freq).expand(h, w, quarter)
+    xx = (torch.arange(w, **f32)[None, :, None] * freq).expand(h, w, quarter)
+    return torch.cat([yy.sin(), yy.cos(), xx.sin(), xx.cos()], -1).reshape(h * w, dim).to(dtype)

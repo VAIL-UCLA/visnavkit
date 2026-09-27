@@ -123,6 +123,7 @@ def compute_and_log_metrics(
     targets: dict,
     calculators: list[MetricsCalculatorBase],
     batch_size: int,
+    prefix: str = "val/metrics",
 ) -> None:
     """Run all metric calculators on predictions/targets and log results to the configured logger."""
     if not calculators:
@@ -132,7 +133,7 @@ def compute_and_log_metrics(
     for calc in calculators:
         metrics.update(calc.calculate(y_hat, targets))
     for k, v in metrics.items():
-        lit_model.log(f"val/metrics/{k}", v, batch_size=batch_size, sync_dist=True)
+        lit_model.log(f"{prefix}/{k}", v, batch_size=batch_size, sync_dist=True)
 
 
 def make_lr_scheduler(optimizer, *, total_steps, warmup_steps, eta_min):
@@ -329,21 +330,22 @@ class LitModel(L.LightningModule):
     def validation_step(self, batch, batch_idx):
         y_hat, targets, loss_debug, x, effective_batch_size = self._step(batch, batch_idx, stage="val")
 
-        planner_preds = self.model.action_decoder.parse_output(y_hat.plan.plans)
         valid = getattr(y_hat.plan, "valid", None)  # rows the policy did not decide (e.g. slots without a frame)
         if valid is not None:
-            planner_preds = {k: v[valid] for k, v in planner_preds.items()}
             targets["action"] = {
                 k: v[valid] if torch.is_tensor(v) and v.ndim and v.shape[0] == len(valid) else v
                 for k, v in targets["action"].items()
             }
-        compute_and_log_metrics(
-            self,
-            planner_preds,
-            targets,
-            self.planner_calculators,
-            effective_batch_size,
-        )
+        # the plan, then any variants the model decodes too (e.g. FlowMatchingPolicy's randn samples) under their own prefix
+        variants = getattr(y_hat.plan, "variants", None) or {}
+        for name, plans in {"": y_hat.plan.plans, **variants}.items():
+            planner_preds = self.model.action_decoder.parse_output(plans)
+            if valid is not None:
+                planner_preds = {k: v[valid] for k, v in planner_preds.items()}
+            prefix = f"val/metrics_{name}" if name else "val/metrics"
+            compute_and_log_metrics(
+                self, planner_preds, targets, self.planner_calculators, effective_batch_size, prefix
+            )
 
     def configure_optimizers(self):
         cfg = self.cfg

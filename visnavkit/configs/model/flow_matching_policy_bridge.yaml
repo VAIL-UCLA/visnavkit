@@ -1,0 +1,6 @@
+# FlowMatchingPolicy, FlowBridge version: anchor -> trajectory flow matching (FlowBridgeHead); everything before the head is flow_matching_policy's.
+# Pass the anchors: model.action_decoder.anchors_path=<kmeans64.npy>
+defaults:
+  - flow_matching_policy
+  - override action_decoder: flow_bridge
+  - _self_
