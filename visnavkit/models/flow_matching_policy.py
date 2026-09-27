@@ -2,9 +2,9 @@
 
 Per slot with a frame: an RGB timm backbone (``FrameEncoder``) -> its global average-pooled feature, and the frozen
 route VAE latent; each Linear -> LayerNorm to D, concatenated -> ``TemporalFusion`` (causal self-attention over the
-slots, random past-slot drop ``temporal.mask_p`` in training). The temporal feature (Linear + slot embedding) is the one
-kv token of ``StepFlowHead`` (flow matching from N(0, I), one query per plan step + step position + ego [v, w]
-embedding). Every slot that holds a frame is decoded and supervised; ``deploy`` decides for the last slot. No goal
+slots, random past-slot drop ``temporal.mask_p`` in training). The head's kv: [fused temporal | frame global | route |
+frame patches (+ 2-D sin-cos)], each Linear -> D + type + slot embedding (FlowPilot-DST's ``FeatureTokens``), for
+``StepFlowHead`` (flow matching from N(0, I), one query per plan step + step position + ego [v, w] embedding). Every slot that holds a frame is decoded and supervised; ``deploy`` decides for the last slot. No goal
 input, no speed head. Eval: ``plan.plans`` is the deterministic plan (1 per slot: zero noise, or the top anchor of the
 anchor heads) and, for a head that ``uses_noise``, ``plan.variants["randn"]`` the ``num_samples`` N(0, I) samples;
 LitModel logs metrics for both. ``action_decoder``: ``StepFlowHead``, or ``S2EHead`` / ``FlowBridgeHead``
@@ -20,6 +20,7 @@ from dataclasses import dataclass
 import torch
 import torch.nn as nn
 
+from visnavkit.models.flowpilot_dst import FeatureTokens
 from visnavkit.models.layers.masking import masked_rows
 from visnavkit.models.modality.route_vae import RouteEncoder
 from visnavkit.models.outputs import BaseOutput, PlanOutput
@@ -54,13 +55,13 @@ class FlowMatchingPolicy(nn.Module):
         self.global_in = nn.Sequential(nn.Linear(frame_encoder.dim, dim), nn.LayerNorm(dim))
         self.route_in = nn.Sequential(nn.Linear(self.route_encoder.dim, dim), nn.LayerNorm(dim))
         self.temporal_encoder = TemporalFusion(2 * dim, dim, seq_len, **dict(temporal or {}))
-        self.kv = nn.Linear(dim, dim)
-        self.slot = nn.Parameter(torch.randn(seq_len, dim) * 0.02)
+        c, r = frame_encoder.dim, self.route_encoder.dim
+        self.kv = FeatureTokens({"temporal": dim, "global": c, "route": r, "patch": c}, dim, seq_len, None)
         self.action_decoder = action_decoder(dim)  # a partial taking dim, e.g. StepFlowHead
 
     def encode(self, vision, frame_mask=None, route_patch=None, route_mask=None, ego=None, action_bounds=None):
-        """-> kv ``(N, 1, D)`` of the N slots holding a frame, their ego [v, w] ``(N, 2)``, bounds ``(N, 2, 5)``, flat
-        indices ``(N,)`` and the frame mask."""
+        """-> kv ``(N, 3 + gh gw, D)`` [fused temporal | global | route | patches] of the N slots holding a frame, their
+        ego [v, w] ``(N, 2)``, bounds ``(N, 2, 5)``, flat indices ``(N,)`` and the frame mask."""
         b, t = vision.shape[:2]
         device = vision.device
         if ego is None or action_bounds is None:
@@ -69,12 +70,14 @@ class FlowMatchingPolicy(nn.Module):
             frame_mask = torch.ones(b, t, dtype=torch.bool, device=device)
         if route_mask is None:
             route_patch, route_mask = vision.new_zeros(b, t, 1, 1), torch.zeros(b, t, dtype=torch.bool, device=device)
-        glob = self.frame_encoder(vision, frame_mask)[0]
+        glob, patches = self.frame_encoder(vision, frame_mask)[:2]
         route = self.route_encoder(route_patch, route_mask).to(glob.dtype)
         temporal = self.temporal_encoder(torch.cat([self.global_in(glob), self.route_in(route)], -1), frame_mask)
         idx = masked_rows(frame_mask)
         slot = torch.arange(t, device=device).repeat(b)[idx]
-        kv = (self.kv(temporal.flatten(0, 1)[idx]) + self.slot[slot])[:, None]
+        rows = lambda f: f.flatten(0, 1)[idx]
+        feats = {"temporal": temporal, "global": glob, "route": route, "patch": patches}
+        kv = self.kv({name: rows(f) for name, f in feats.items()}, slot, None)
         ego_vw = ego.flatten(0, 1)[idx][:, :2].float()
         bounds = action_bounds.repeat_interleave(t, 0)[idx].float()
         return kv, ego_vw, bounds, idx, frame_mask

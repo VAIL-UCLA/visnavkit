@@ -1,0 +1,4 @@
+# FlowMatchingPolicy's frame encoder: RGB FastViT-SA12 per slot, ImageNet weights, trainable (visnavkit.models.vision.frame_encoder).
+_target_: visnavkit.models.vision.frame_encoder.FrameEncoder
+backbone_name: fastvit_sa12
+pretrained: true

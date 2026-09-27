@@ -4,16 +4,13 @@
 # position + ego [v, w], each ego channel hidden w.p. 0.9). Every slot with a frame is supervised. Needs pose_size 5
 # targets, `ego` starting with [speed, yaw_rate] and action bounds (configs/experiment/flow_matching_policy_clips1k.yaml).
 defaults:
+  - frame_encoder: fastvit_sa12  # dune: the frozen DUNE ViT-B/14, as flowpilot_dune_dst
   - action_decoder: step_flow  # s2e_anchor / flow_bridge: the anchor heads (flow_matching_policy_s2e / _bridge)
   - _self_
 
 _target_: visnavkit.models.flow_matching_policy.FlowMatchingPolicy
 dim: 256
 seq_len: ${common.seq_length}
-frame_encoder:
-  _target_: visnavkit.models.vision.frame_encoder.FrameEncoder
-  backbone_name: fastvit_sa12
-  pretrained: true
 temporal:
   num_layers: 2
   num_heads: 8

@@ -1,7 +1,7 @@
 """StepFlowHead: flow matching from N(0, I) with one query token per plan step (``flow_matching_policy``).
 
 The state is AnchorFlowHead's: the normalised per-step [dx, dy, dyaw, v, w] under the row's ``action_bounds``; t = 0
-noise, 1 data, Beta(1.5, 1) times. Query per step = Linear(x_t step) + learned step position + the ego [v, w] embedding
+noise, 1 data, t ~ U(0, 1) in training. Query per step = Linear(x_t step) + learned step position + the ego [v, w] embedding
 (each channel hidden w.p. ``ego_mask_p`` in training); ``num_layers`` DiT blocks [adaLN-Zero(flow time) self-attention
 over the steps, cross-attention to the frame's kv, FF] -> the velocity per step. Loss MSE(velocity, x1 - eps).
 Inference: ``sample_steps`` Euler steps from noise 0 (one deterministic plan) or from N(0, I) draws (``num_samples``
@@ -20,12 +20,7 @@ from visnavkit.models.layers.embeddings import SinusoidalTimeEmbedding
 
 class StepFlowHead(nn.Module):
     pose_size, uses_noise = 5, True
-    norm, metric, ego_cond, sample_time = (
-        AnchorFlowHead.norm,
-        AnchorFlowHead.metric,
-        AnchorFlowHead.ego_cond,
-        AnchorFlowHead.sample_time,
-    )
+    norm, metric, ego_cond = AnchorFlowHead.norm, AnchorFlowHead.metric, AnchorFlowHead.ego_cond
 
     def __init__(
         self, dim, num_pts=80, num_layers=4, num_heads=8, dropout=0.1, ego_mask_p=0.9, sample_steps=4, num_samples=1
@@ -47,6 +42,9 @@ class StepFlowHead(nn.Module):
         self.ada_out = nn.Sequential(nn.SiLU(), nn.Linear(dim, 2 * dim))
         nn.init.zeros_(self.ada_out[-1].weight), nn.init.zeros_(self.ada_out[-1].bias)
         self.out = nn.Linear(dim, self.pose_size)
+
+    def sample_time(self, n, device):
+        return torch.rand(n, device=device)
 
     def velocity(self, x, t, kv, ego):
         """``(N, T, 5)``, ``(N,)``, kv ``(N, L, D)``, ego ``(N, D)`` -> ``(N, T, 5)``."""

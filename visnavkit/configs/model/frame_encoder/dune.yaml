@@ -1,0 +1,6 @@
+# FlowMatchingPolicy's frame encoder as FlowPilot-DUNE's: a frozen DUNE ViT-B/14 per slot + a trainable identity-init
+# Linear(768, 768) adapter (visnavkit.models.vision.dune); the policy reads its global feature (the patch-token mean).
+_target_: visnavkit.models.vision.dune.DuneEncoder
+weights: null  # a reference UnifiedModel ckpt (model.encoder.vision.encoder.*) or that encoder's state dict; null = torch.hub DUNE
+downscale: 4  # patch pooling (the patches are unused here: kv is the temporal token)
+hub_name: dune_vitbase_14_448_encoder
