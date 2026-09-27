@@ -28,7 +28,7 @@ description: Implement downstream features in visnavkit (new components, dataset
 `dataset=torch` (torchcodec, CPU) supports every goal type, goal lists, `common.ego_features` and `common.use_camera`; `dataset=dali` (GPU) supports `none`/`point` goals and speed-only ego. The dataset reads `goal_type` from `${model.goal_encoder.goal_type}` (set it explicitly when the recipe uses a list of goal encoders). Pose and goal targets come from `visnavkit/data/pose_targets.py` — reuse, never reimplement.
 
 ### Layout
-`models/vision` · `models/temporal` · `models/goal` · `models/action` (+ `denoisers/`, `schedulers/`) · `models/policy.py` (NavigationPolicy) · `models/lit_model.py` · `data/` · `evaluation/` · `benchmark/` · `scripts/` (thin entry points) · `configs/model/<group>/` mirrors the packages.
+`models/vision` · `models/temporal` · `models/goal` · `models/action` (+ `denoisers/`, `schedulers/`) · `models/policy.py` (NavigationPolicy) · `models/lit_model.py` · `data/` · `evaluation/` · `export/` (ONNX, TensorRT, artifact check) · `benchmark/` · `scripts/` (thin entry points) · `configs/model/<group>/` mirrors the packages.
 
 ### Policy
 - Training: `policy(vision, goal=None, noise=None, **modality_inputs)` with vision (B, S, 3, h, w) float in [0,1] and one keyword per modality batch key (ego (B, S, E), intrinsics (B, S, 3, 3), extrinsics (B, S, 4, 4), ...) → `PolicyOutput(vision=VisionOutput(tokens (B*S, Kv, D), speed), plan=PlanOutput(plans (decisions, M*(2*T*P+1))), goal_tokens, modality_tokens)`. Every non-vision input is optional and falls back to its encoder's null token.

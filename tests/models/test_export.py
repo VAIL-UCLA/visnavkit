@@ -1,12 +1,19 @@
-"""Deployment export: presence-driven inputs, ONNX Runtime parity, checkpoint round trip."""
+"""Deployment export: presence-driven inputs, ONNX Runtime parity, precision, sidecars, checkpoint round trip."""
+
+import json
 
 import numpy as np
+import onnx
 import onnxruntime as ort
 import pytest
 import torch
 from hydra import compose, initialize_config_module
 
-from visnavkit.scripts.export import export_policy, parse_plan_output
+from visnavkit.benchmark.export import sha256_file
+from visnavkit.export.artifacts import compare_outputs, onnx_session
+from visnavkit.export.check import check_export
+from visnavkit.export.graph import export_onnx, parse_plan_output
+from visnavkit.export.precision import bf16_bits, check_precision, onnx_precision, tolerance
 
 SMALL = [
     "common.seq_length=2",
@@ -66,10 +73,10 @@ def _inputs(path):
 def test_untrained_export_has_presence_driven_inputs_and_parity(tmp_path, overrides, inputs):
     torch.set_num_threads(1)
     path = tmp_path / "policy.onnx"
-    errors = export_policy(_cfg(*overrides), path, half=False)
+    errors = export_onnx(_cfg(*overrides), path, precision="fp32")["parity_max_abs_error"]
     assert _inputs(path) == inputs
     assert set(errors) == {"plan", "feat_out"}
-    # These are absolute errors on untrained outputs; export_policy itself applies the relative
+    # These are absolute errors on untrained outputs; export_onnx itself applies the relative
     # check (rtol 2e-3), and an untrained denoiser amplifies float noise over its sampling loop.
     assert all(error < 5e-3 for error in errors.values()), errors
 
@@ -92,8 +99,24 @@ def test_checkpoint_round_trip_enforces_parity(tmp_path):
     trainer.save_checkpoint(checkpoint)
     restored = LitModel.load_from_checkpoint(checkpoint, cfg=cfg)
     assert not any(p.requires_grad is None for p in restored.parameters())
-    errors = export_policy(cfg, tmp_path / "trained.onnx", half=False, checkpoint=str(checkpoint))
-    assert errors["plan"] < 2e-4
+    path = tmp_path / "trained.onnx"
+    meta = export_onnx(cfg, path, precision="fp32", checkpoint=str(checkpoint))
+    assert meta["parity_max_abs_error"]["plan"] < 2e-4
+    assert meta == json.loads(path.with_suffix(".metadata.json").read_text())
+    assert meta["weights"] == "checkpoint" and meta["checkpoint_sha256"] == sha256_file(checkpoint)
+    # The checkpoint, the .pth and the graph agree on the traced inputs; the .pth runs the same weights bit for bit.
+    pth = str(path.with_suffix(".pth"))
+    report = check_export(checkpoint=str(checkpoint), pth=pth, onnx_path=str(path), iterations=0)
+    assert report["ok"] and set(report["artifacts"]) == {"pth", "onnx"}, report
+    assert report["artifacts"]["pth"]["outputs"]["plan"]["max_abs"] < 1e-6
+    assert [item["check"] for item in report["provenance"]] == [
+        "onnx metadata: onnx_sha256",
+        "onnx metadata: checkpoint_sha256",
+        "onnx metadata: pth_sha256",
+    ]
+    # A replaced graph no longer matches its sidecar.
+    path.with_suffix(".metadata.json").write_text(json.dumps({**meta, "onnx_sha256": "0" * 64}))
+    assert not check_export(checkpoint=str(checkpoint), onnx_path=str(path), iterations=0)["ok"]
 
 
 def test_numpy_plan_parser_keeps_xy_layout():
@@ -105,3 +128,124 @@ def test_numpy_plan_parser_keeps_xy_layout():
     np.testing.assert_array_equal(parsed["pred_logits"], logits)
     np.testing.assert_array_equal(parsed["pred_plans"], means[:, :, :2])
     np.testing.assert_array_equal(parsed["best_plan"], means[1, :, :2])
+
+
+REGRESSION = ["model/vision_encoder=resnet18", "model/action_decoder=regression", "model.action_decoder.hidden=16"]
+
+
+def test_untrained_export_writes_sidecars_the_check_replays(tmp_path):
+    torch.set_num_threads(1)
+    path = tmp_path / "policy.onnx"
+    export_onnx(_cfg(*REGRESSION, "batch_size=2"), path, precision="fp32")
+    meta = json.loads(path.with_suffix(".metadata.json").read_text())
+    assert (meta["precision"], meta["stored_precision"], meta["weights"]) == ("fp32", "fp32", "untrained")
+    assert meta["input_shapes"]["vision"] == [2, 3, 32, 32]  # shapes are fixed at the export batch size
+    assert meta["onnx_sha256"] == sha256_file(path) and meta["pth_sha256"] == sha256_file(path.with_suffix(".pth"))
+    assert set(np.load(path.with_suffix(".inputs.npz"))) == set(meta["input_names"]) == {"vision", "feature_buffer"}
+    report = check_export(pth=str(path.with_suffix(".pth")), onnx_path=str(path), iterations=1)
+    assert report["ok"] and set(report["artifacts"]) == {"onnx"}, report
+    assert report["inputs"]["source"] == str(path.with_suffix(".inputs.npz"))
+    assert report["artifacts"]["onnx"]["latency_ms"] > 0 and report["artifacts"]["onnx"]["endpoint_delta_m"] < 1e-3
+
+
+def test_fp16_export_keeps_fp32_io_and_stays_within_its_tolerance(tmp_path):
+    torch.set_num_threads(1)
+    path = tmp_path / "policy.onnx"
+    export_onnx(_cfg(*REGRESSION), path, precision="fp16")
+    session = ort.InferenceSession(str(path), providers=["CPUExecutionProvider"])
+    assert {node.type for node in (*session.get_inputs(), *session.get_outputs())} == {"tensor(float)"}
+    assert onnx_precision(onnx.load(str(path)))[0] == "fp16"
+    report = check_export(pth=str(path.with_suffix(".pth")), onnx_path=str(path), iterations=0)
+    assert report["ok"] and report["artifacts"]["onnx"]["precision"] == "fp16", report
+    assert report["artifacts"]["onnx"]["tolerance"] == {"rtol": 1e-2, "atol": 1e-2}
+
+
+def test_check_runs_the_graph_unoptimized_when_the_optimizer_fails(tmp_path, monkeypatch):
+    from visnavkit.export import check
+
+    torch.set_num_threads(1)
+    path = tmp_path / "policy.onnx"
+    export_onnx(_cfg(*REGRESSION), path, precision="fp16")
+    levels = []
+
+    def session(graph, provider="CPUExecutionProvider", optimize=True):
+        levels.append(optimize)
+        if optimize:
+            raise RuntimeError("Exception during initialization")
+        return onnx_session(graph, provider, optimize=False)
+
+    monkeypatch.setattr(check, "onnx_session", session)
+    report = check_export(pth=str(path.with_suffix(".pth")), onnx_path=str(path), iterations=0)
+    assert report["ok"] and levels == [True, False], report
+
+
+def test_a_strict_export_fails_after_writing_every_file(tmp_path, monkeypatch):
+    from visnavkit.export import artifacts
+
+    torch.set_num_threads(1)
+    monkeypatch.setattr(artifacts, "tolerance", lambda precision: (0.0, 0.0))
+    path = tmp_path / "policy.onnx"
+    with pytest.raises(AssertionError, match="parity exceeded"):
+        export_onnx(_cfg(*REGRESSION, "strict=true"), path, precision="fp16")
+    meta = json.loads(path.with_suffix(".metadata.json").read_text())
+    assert not meta["parity_pass"] and meta["onnx_sha256"] == sha256_file(path)
+    assert path.with_suffix(".pth").exists() and path.with_suffix(".inputs.npz").exists()
+
+
+def test_bf16_export_stores_bf16_weights_behind_fp32_io(tmp_path):
+    torch.set_num_threads(1)
+    path = tmp_path / "policy.onnx"
+    meta = export_onnx(_cfg(*REGRESSION), path, precision="bf16")
+    graph = onnx.load(str(path)).graph
+    assert (meta["stored_precision"], meta["parity_precision"]) == ("bf16", "fp32")
+    assert {node.type.tensor_type.elem_type for node in (*graph.input, *graph.output)} == {onnx.TensorProto.FLOAT}
+    assert not any(tensor.data_type == onnx.TensorProto.FLOAT16 for tensor in graph.initializer)
+    # ONNX Runtime has no bf16 kernels: the check verifies the sidecars and leaves the run to the engine.
+    report = check_export(pth=str(path.with_suffix(".pth")), onnx_path=str(path), iterations=0)
+    assert report["ok"] and not report["artifacts"] and len(report["provenance"]) == 2, report
+
+
+def test_bf16_bits_round_to_nearest_and_precisions_are_named():
+    values = np.array([1.0, -2.5, 3.14159265, 1e-8, 3e5], dtype=np.float32)
+    decoded = (bf16_bits(values).astype(np.uint32) << 16).view(np.float32)
+    np.testing.assert_allclose(decoded, values, rtol=2**-8)
+    assert decoded[0] == 1.0 and decoded[1] == -2.5
+    with pytest.raises(ValueError, match="precision='int8'"):
+        check_precision("int8")
+    assert tolerance("bf16") == (5e-2, 3e-2) and tolerance("fp16", atol=1e-3) == (1e-2, 1e-3)
+
+
+def test_compare_outputs_applies_the_allclose_rule():
+    report = compare_outputs(["a"], [np.array([1.0, 100.0])], [np.array([1.0001, 100.5])], rtol=1e-2, atol=1e-3)
+    assert report["a"]["pass"] and report["a"]["max_abs"] == pytest.approx(0.5)
+    assert not compare_outputs(["a"], [np.array([1.0])], [np.array([1.1])], rtol=1e-2, atol=1e-3)["a"]["pass"]
+    assert not compare_outputs(["a"], [np.array([1.0])], [np.array([np.nan])], rtol=1e-2, atol=1e-3)["a"]["finite"]
+    with pytest.raises(ValueError, match="shape"):
+        compare_outputs(["a"], [np.zeros(2)], [np.zeros(3)], rtol=1e-2, atol=1e-3)
+
+
+def test_a_checkpoint_loads_without_the_files_its_recipe_was_initialized_from(tmp_path):
+    from omegaconf import OmegaConf
+
+    from visnavkit.models.lit_model import disable_pretrained_downloads
+
+    kept = tmp_path / "anchors.npy"
+    np.save(kept, np.zeros((4, 8, 2), dtype=np.float32))
+    head = {"anchors_path": "/training/machine/kmeans64.npy", "route": {"weights": "/training/machine/vae.ckpt"}}
+    cfg = disable_pretrained_downloads(
+        OmegaConf.create({"pretrained": True, "head": head, "other": {"anchors_path": str(kept)}})
+    )
+    assert cfg == {
+        "pretrained": False,
+        "head": {"anchors_path": None, "route": {"weights": None}},
+        "other": {"anchors_path": str(kept)},
+    }
+
+
+def test_the_reference_runs_in_exact_float32_whatever_the_session_asked_for():
+    from visnavkit.export.artifacts import exact_reference
+
+    torch.set_float32_matmul_precision("medium")
+    with exact_reference():
+        assert torch.get_float32_matmul_precision() == "highest" and not torch.backends.mha.get_fastpath_enabled()
+    assert torch.get_float32_matmul_precision() == "medium"
