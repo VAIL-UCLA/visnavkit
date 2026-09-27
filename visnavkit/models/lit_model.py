@@ -84,11 +84,13 @@ def _route_image(batch, i):
 
 
 def disable_pretrained_downloads(model_cfg: DictConfig) -> DictConfig:
-    """Complete checkpoints carry every weight; skip backbone downloads and initialization files, however nested."""
+    """Complete checkpoints carry every weight; skip backbone downloads and initialization files, however nested.
+    An anchors file is skipped only when it is missing (it stayed on the training machine): the checkpoint
+    carries the anchors, and the recipe's ``num_anchors`` must then match them."""
     for key, value in model_cfg.items():
         if key == "pretrained":
             model_cfg[key] = False
-        elif key == "weights":
+        elif key == "weights" or (key == "anchors_path" and value and not Path(value).exists()):
             model_cfg[key] = None
         elif isinstance(value, DictConfig):
             disable_pretrained_downloads(value)

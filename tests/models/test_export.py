@@ -209,3 +209,21 @@ def test_compare_outputs_applies_the_allclose_rule():
     assert not compare_outputs(["a"], [np.array([1.0])], [np.array([np.nan])], rtol=1e-2, atol=1e-3)["a"]["finite"]
     with pytest.raises(ValueError, match="shape"):
         compare_outputs(["a"], [np.zeros(2)], [np.zeros(3)], rtol=1e-2, atol=1e-3)
+
+
+def test_a_checkpoint_loads_without_the_files_its_recipe_was_initialized_from(tmp_path):
+    from omegaconf import OmegaConf
+
+    from visnavkit.models.lit_model import disable_pretrained_downloads
+
+    kept = tmp_path / "anchors.npy"
+    np.save(kept, np.zeros((4, 8, 2), dtype=np.float32))
+    head = {"anchors_path": "/training/machine/kmeans64.npy", "route": {"weights": "/training/machine/vae.ckpt"}}
+    cfg = disable_pretrained_downloads(
+        OmegaConf.create({"pretrained": True, "head": head, "other": {"anchors_path": str(kept)}})
+    )
+    assert cfg == {
+        "pretrained": False,
+        "head": {"anchors_path": None, "route": {"weights": None}},
+        "other": {"anchors_path": str(kept)},
+    }
