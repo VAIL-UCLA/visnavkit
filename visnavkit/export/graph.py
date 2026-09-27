@@ -22,12 +22,12 @@ from visnavkit.export.artifacts import (
     load_model,
     mha_fastpath_disabled,
 )
-from visnavkit.export.precision import ONNX_PRECISIONS, check_precision
+from visnavkit.export.precision import check_precision
 from visnavkit.models.action.outputs import parse_plan_output as parse_tensor_plan_output
 from visnavkit.utils.logger import get_logger
 
 logger = get_logger(__name__)
-EXPORT_OPTIONS = ("checkpoint", "output", "onnx_opset_version", "precision", "export_heads")
+EXPORT_OPTIONS = ("checkpoint", "output", "onnx_opset_version", "precision", "batch_size", "export_heads")
 
 
 class _RMSNorm(nn.Module):
@@ -118,7 +118,7 @@ def export_onnx(
     *,
     precision=None,
     checkpoint=...,
-    batch_size=1,
+    batch_size=None,
     opset=None,
     export_heads=None,
     seed=0,
@@ -138,20 +138,23 @@ def export_onnx(
         cfg.setdefault("output", str(output))
         cfg.setdefault("onnx_opset_version", 14)
         cfg.setdefault("precision", "fp16")
+        cfg.setdefault("batch_size", 1)
         cfg.setdefault("export_heads", [])
         if precision is not None:
             cfg.precision = precision
+        if batch_size is not None:
+            cfg.batch_size = batch_size
         if opset is not None:
             cfg.onnx_opset_version = opset
         if export_heads is not None:
             cfg.export_heads = list(export_heads)
     model, cfg = load(cfg)
-    precision = check_precision(str(cfg.precision), ONNX_PRECISIONS)
+    precision = check_precision(str(cfg.precision))
     opset = int(cfg.onnx_opset_version)
     output = Path(output)
     output.parent.mkdir(parents=True, exist_ok=True)
     wrapper, inputs, input_names, output_names = prepare_graph(
-        model, cfg, batch_size=batch_size, seed=seed, export_heads=list(cfg.export_heads), device=device
+        model, cfg, batch_size=int(cfg.batch_size), seed=seed, export_heads=list(cfg.export_heads), device=device
     )
     logger.info("Export inputs: " + ", ".join(f"{name}{tuple(t.shape)}" for name, t in zip(input_names, inputs)))
 

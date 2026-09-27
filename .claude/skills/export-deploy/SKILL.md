@@ -6,10 +6,10 @@ description: Export a visnavkit checkpoint to ONNX and debug export failures. Us
 # Export / deploy
 
 ```bash
-uv run visnavkit-export checkpoint=<ckpt> output=<out.onnx> precision=fp32|fp16  # checkpoint=null: untrained pipeline check (parity reported, not enforced)
+uv run visnavkit-export checkpoint=<ckpt> output=<out.onnx> precision=fp32|fp16|bf16 batch_size=1  # checkpoint=null: untrained pipeline check (parity reported, not enforced)
 uv run visnavkit-build-engine onnx=<out.onnx>                # TensorRT engine at the graph's precision + metadata (uv pip install --python .venv tensorrt-cu12, matching the driver's CUDA)
 uv run visnavkit-check-export checkpoint=<ckpt> pth=<out.pth> onnx=<out.onnx> engine=<engine>  # the traced inputs through every artifact
-uv run visnavkit-export-smoke <overrides> [--precision fp16 --engine-precision bf16 --no-engine]  # random weights through the whole path
+uv run visnavkit-export-smoke <overrides> [--precision fp16|bf16 --no-engine]  # random weights through the whole path
 ```
 
 ## What `export/graph.py` does (`scripts/export.py` is its Hydra main)
@@ -21,6 +21,7 @@ uv run visnavkit-export-smoke <overrides> [--precision fp16 --engine-precision b
 - Unsupported aten op: usually a training-only branch; confirm `eval()` and the reduction flip. New denoisers must avoid data-dependent control flow (fixed `sample_steps`).
 - Shape mismatch at parity: `feature_idxs` gathering in `NavigationPolicy.predict` must match the buffer layout (newest last, width `K * feat_size`).
 - Goal/noise missing in the graph: check `policy.export_input_names()`; None inputs are dropped by design.
-- fp16 NaNs: rerun with `precision=fp32` to isolate; a `bf16` engine tolerates 2e-2 rel, check the endpoint delta.
-- Engine build: TensorRT 11 is strongly typed, so an fp16 engine needs an fp16 export (TensorRT 10 can still cast with `precision=`); graphs keep their fixed export shapes (a dynamic batch axis breaks the FlowPilot-DST build on TensorRT 11.3); an engine runs only on the GPU / TensorRT version that built it.
+- fp16 NaNs: rerun with `precision=fp32` to isolate. bf16 keeps fp32's range at 8 significant bits (tolerance 2e-2 rel); ONNX Runtime cannot run a bf16 graph, so the export checks the fp32 graph and the engine check covers the cast.
+- Engine build: engines are strongly typed, so an fp16 / bf16 engine needs an export at that precision; graphs keep their fixed export shapes (a dynamic batch axis breaks the FlowPilot-DST build on TensorRT 11.3); an engine runs only on the GPU / TensorRT version that built it.
+- `docs/export.md` is the user guide (precisions, files, check output).
 - Paste the EXPORT + SANITY CHECK blocks and the EXPORT CHECK table in the PR/report.

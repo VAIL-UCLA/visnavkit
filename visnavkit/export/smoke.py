@@ -27,7 +27,6 @@ def export_smoke(
     output_dir,
     *,
     precision="fp32",
-    engine_precision=None,
     engine=True,
     batch_size=1,
     iterations=10,
@@ -58,9 +57,8 @@ def export_smoke(
             from visnavkit.export.trt import build_engine
             from visnavkit.scripts.build_engine import print_engine_summary
 
-            engine_path = output_dir / f"{name}.{engine_precision or precision}.engine"
-            meta_engine = build_engine(onnx_path, engine_path, precision=engine_precision, workspace_gb=workspace_gb)
-            print_engine_summary(meta_engine)
+            engine_path = output_dir / f"{name}.{precision}.engine"
+            print_engine_summary(build_engine(onnx_path, engine_path, workspace_gb=workspace_gb))
         except ImportError as error:
             logger.warning(f"Skipping the TensorRT engine: {error}")
             engine_path = None

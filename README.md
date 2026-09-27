@@ -20,7 +20,7 @@ B batch, F frames, M candidates, T steps, D pose; every input but vision is opti
 `policy.act(vision, goal, **inputs)`; `forward` is its training view (one decision per frame, packed
 for the losses) and `predict` its streaming view (the newest frame plus a feature buffer).
 
-[Architecture](docs/architecture.md) · [Data](docs/data.md) · [Models & weights](docs/models.md) · [Benchmark](docs/benchmark.md) · [Roadmap](docs/roadmap.md)
+[Architecture](docs/architecture.md) · [Data](docs/data.md) · [Models & weights](docs/models.md) · [Export](docs/export.md) · [Benchmark](docs/benchmark.md) · [Roadmap](docs/roadmap.md)
 
 ## Install
 
@@ -126,7 +126,7 @@ Sidecar layout, the opt-in ego and calibration inputs, and the public corpora th
 ```bash
 uv run visnavkit-train dataset=torch model=mimic ema=default
 uv run visnavkit-train-route route=vae                      # route-patch AE/VAE from route_images.npy
-uv run visnavkit-export checkpoint=logs/baseline/.../last.ckpt output=outputs/policy.onnx precision=fp32  # fp32 | fp16
+uv run visnavkit-export checkpoint=logs/baseline/.../last.ckpt output=outputs/policy.onnx precision=fp32  # fp32 | fp16 | bf16
 uv run visnavkit-build-engine onnx=outputs/policy.onnx                    # TensorRT engine at the graph's precision -> policy.fp32.engine
 uv run visnavkit-check-export checkpoint=logs/baseline/.../last.ckpt onnx=outputs/policy.onnx engine=outputs/policy.fp16.engine
 uv run visnavkit-export-smoke model=gnm      # the same path on random weights: ckpt -> ONNX -> engine -> check, with latencies
@@ -142,7 +142,7 @@ metrics — [architecture](docs/architecture.md#inference-deployment-benchmark),
 [benchmark](docs/benchmark.md). An export also writes `.pth` (weights + config, Lightning-free),
 `.metadata.json` and `.inputs.npz` beside the graph; the check replays those inputs through the
 checkpoint, the `.pth`, ONNX Runtime and the TensorRT engine and prints per-output errors, hashes
-and latency.
+and latency: [export guide](docs/export.md).
 
 ## Development
 

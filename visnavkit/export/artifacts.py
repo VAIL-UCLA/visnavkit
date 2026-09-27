@@ -96,7 +96,8 @@ def mha_fastpath_disabled():
 
 
 def onnx_session(path, provider="CPUExecutionProvider", optimize=True):
-    """One ONNX Runtime session; ``optimize=False`` runs the graph as stored (parity of the export itself).
+    """One ONNX Runtime session on a file or serialized graph; ``optimize=False`` runs it as stored (parity
+    of the export itself).
 
     Optimized sessions stop at the extended level: the hardware layout pass of ``ORT_ENABLE_ALL`` crashed
     ONNX Runtime 1.28 on fp16 CPU graphs with many threads.
@@ -107,7 +108,8 @@ def onnx_session(path, provider="CPUExecutionProvider", optimize=True):
     level = ort.GraphOptimizationLevel
     options.graph_optimization_level = level.ORT_ENABLE_EXTENDED if optimize else level.ORT_DISABLE_ALL
     options.intra_op_num_threads = torch.get_num_threads()
-    session = ort.InferenceSession(str(path), sess_options=options, providers=[provider])
+    graph = path if isinstance(path, bytes) else str(path)
+    session = ort.InferenceSession(graph, sess_options=options, providers=[provider])
     session.disable_fallback()
     return session
 
@@ -160,8 +162,11 @@ def finalize_export(
 ):
     """Cast the traced graph to ``precision`` and save it, check ONNX Runtime parity at that precision's
     tolerance (``strict``, default: enforced for checkpoint weights, reported for untrained ones), write
-    ``.inputs.npz``, ``.pth`` and ``.metadata.json`` beside it and print the summary. Returns the metadata."""
+    ``.inputs.npz``, ``.pth`` and ``.metadata.json`` beside it and print the summary. Returns the metadata.
+    ONNX Runtime has no bf16 kernels: a bf16 export checks the fp32 graph, the engine check covers the cast."""
     output = Path(output)
+    checked = "fp32" if precision == "bf16" else precision
+    traced = model_onnx.SerializeToString() if checked != precision else None
     if precision != "fp32":
         logger.info(f"Casting weights to {precision} (io stays fp32)...")
     model_onnx = convert_onnx(model_onnx, precision)
@@ -169,8 +174,8 @@ def finalize_export(
     stored, elements = onnx_precision(model_onnx)
     logger.info(f"Saved {output} ({size_mb(output)}, {stored} weights, fp32 io, opset {opset})")
 
-    outputs = run_onnx(onnx_session(output, optimize=False), feeds, output_names)
-    rtol, atol = tolerance(precision)
+    outputs = run_onnx(onnx_session(traced or output, optimize=False), feeds, output_names)
+    rtol, atol = tolerance(checked)
     report = compare_outputs(output_names, reference, [outputs[name] for name in output_names], rtol, atol)
     errors = {name: item["max_abs"] for name, item in report.items()}
     failed = [name for name, item in report.items() if not item["pass"]]
@@ -179,7 +184,7 @@ def finalize_export(
         raise AssertionError(f"PyTorch/ONNX parity exceeded rtol {rtol}, atol {atol} for {failed}: {summary}")
     if failed:
         logger.warning(f"Parity tolerance exceeded for {failed} ({summary}); not enforced")
-    logger.info(f"Nonzero-input PyTorch/ONNX parity ({precision}, rtol {rtol}, atol {atol}): {summary}")
+    logger.info(f"Nonzero-input PyTorch/ONNX parity ({checked} graph, rtol {rtol}, atol {atol}): {summary}")
 
     np.savez(output.with_suffix(".inputs.npz"), **feeds)
     pth = save_pth(output.with_suffix(".pth"), cfg, model)
@@ -206,6 +211,7 @@ def finalize_export(
         "output_shapes": {name: list(np.asarray(value).shape) for name, value in outputs.items()},
         "parameters_total": sum(p.numel() for p in model.parameters()),
         "parity_max_abs_error": errors,
+        "parity_precision": checked,
         "parity_tolerance": {"rtol": rtol, "atol": atol},
         "decision": label,
         "seed": seed,
@@ -236,7 +242,7 @@ def print_export_summary(meta, lines):
     print(
         "parity  : "
         + ", ".join(f"{name} {error:.3g}" for name, error in meta["parity_max_abs_error"].items())
-        + f" max abs error vs PyTorch (rtol {tol['rtol']}, atol {tol['atol']})"
+        + f" max abs error vs PyTorch ({meta['parity_precision']} graph, rtol {tol['rtol']}, atol {tol['atol']})"
     )
     print("=" * 40 + " SANITY CHECK " + "=" * 40)
     print("\n".join(lines))

@@ -13,7 +13,7 @@ from visnavkit.benchmark.export import sha256_file
 from visnavkit.export.artifacts import compare_outputs
 from visnavkit.export.check import check_export
 from visnavkit.export.graph import export_onnx, parse_plan_output
-from visnavkit.export.precision import convert_onnx, onnx_precision, tolerance
+from visnavkit.export.precision import bf16_bits, check_precision, onnx_precision, tolerance
 
 SMALL = [
     "common.seq_length=2",
@@ -136,9 +136,10 @@ REGRESSION = ["model/vision_encoder=resnet18", "model/action_decoder=regression"
 def test_untrained_export_writes_sidecars_the_check_replays(tmp_path):
     torch.set_num_threads(1)
     path = tmp_path / "policy.onnx"
-    export_onnx(_cfg(*REGRESSION), path, precision="fp32")
+    export_onnx(_cfg(*REGRESSION, "batch_size=2"), path, precision="fp32")
     meta = json.loads(path.with_suffix(".metadata.json").read_text())
     assert (meta["precision"], meta["stored_precision"], meta["weights"]) == ("fp32", "fp32", "untrained")
+    assert meta["input_shapes"]["vision"] == [2, 3, 32, 32]  # shapes are fixed at the export batch size
     assert meta["onnx_sha256"] == sha256_file(path) and meta["pth_sha256"] == sha256_file(path.with_suffix(".pth"))
     assert set(np.load(path.with_suffix(".inputs.npz"))) == set(meta["input_names"]) == {"vision", "feature_buffer"}
     report = check_export(pth=str(path.with_suffix(".pth")), onnx_path=str(path), iterations=1)
@@ -159,10 +160,26 @@ def test_fp16_export_keeps_fp32_io_and_stays_within_its_tolerance(tmp_path):
     assert report["artifacts"]["onnx"]["tolerance"] == {"rtol": 1e-2, "atol": 2e-3}
 
 
-def test_bf16_is_an_engine_precision_not_an_onnx_one():
-    empty = onnx.helper.make_model(onnx.helper.make_graph([], "empty", [], []))
-    with pytest.raises(ValueError, match="precision='bf16'"):
-        convert_onnx(empty, "bf16")
+def test_bf16_export_stores_bf16_weights_behind_fp32_io(tmp_path):
+    torch.set_num_threads(1)
+    path = tmp_path / "policy.onnx"
+    meta = export_onnx(_cfg(*REGRESSION), path, precision="bf16")
+    graph = onnx.load(str(path)).graph
+    assert (meta["stored_precision"], meta["parity_precision"]) == ("bf16", "fp32")
+    assert {node.type.tensor_type.elem_type for node in (*graph.input, *graph.output)} == {onnx.TensorProto.FLOAT}
+    assert not any(tensor.data_type == onnx.TensorProto.FLOAT16 for tensor in graph.initializer)
+    # ONNX Runtime has no bf16 kernels: the check verifies the sidecars and leaves the run to the engine.
+    report = check_export(pth=str(path.with_suffix(".pth")), onnx_path=str(path), iterations=0)
+    assert report["ok"] and not report["artifacts"] and len(report["provenance"]) == 2, report
+
+
+def test_bf16_bits_round_to_nearest_and_precisions_are_named():
+    values = np.array([1.0, -2.5, 3.14159265, 1e-8, 3e5], dtype=np.float32)
+    decoded = (bf16_bits(values).astype(np.uint32) << 16).view(np.float32)
+    np.testing.assert_allclose(decoded, values, rtol=2**-8)
+    assert decoded[0] == 1.0 and decoded[1] == -2.5
+    with pytest.raises(ValueError, match="precision='int8'"):
+        check_precision("int8")
     assert tolerance("bf16") == (2e-2, 1e-2) and tolerance("fp16", atol=1e-3) == (1e-2, 1e-3)
 
 

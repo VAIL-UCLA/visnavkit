@@ -9,7 +9,7 @@ device: cpu  # PyTorch reference device
 provider: CPUExecutionProvider  # ONNX Runtime execution provider (CUDAExecutionProvider needs onnxruntime-gpu)
 atol: null  # override the per-precision tolerance (atol / rtol): fp32 2e-4 / 2e-3, tf32 and fp16 2e-3 / 1e-2, bf16 1e-2 / 2e-2
 rtol: null
-iterations: 10  # latency samples per backend after 2 warmups; 0 skips timing
+iterations: 10  # latency samples per backend after 3 warmups, the median is reported; 0 skips timing
 
 hydra:
   job:

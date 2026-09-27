@@ -4,7 +4,7 @@ exporter ``.pth``, the ONNX graph (ONNX Runtime) and the TensorRT engine.
 The traced inputs ``<onnx>.inputs.npz`` are replayed when present (``inputs`` names another ``.npz``), else the
 reference model generates them (``seed``, ``batch_size``). Every artifact is checked against the reference at the
 tolerance of its precision (``atol`` / ``rtol`` override), the sidecar metadata hashes are verified and each
-backend is timed.
+backend is timed (median). A bf16 graph is verified by hash and through its engine: ONNX Runtime cannot run it.
 """
 
 import time
@@ -65,15 +65,16 @@ def _engine_runner(path, output_names):
     return lambda feeds: {name: value for name, value in runner(feeds).items() if name in output_names}
 
 
-def _latency_ms(run, feeds, iterations, warmup=2):
+def _latency_ms(run, feeds, iterations, warmup=3):
+    """The median of ``iterations`` timed runs: a GPU leaving its idle state skews a mean."""
     if iterations < 1:
         return None
-    for _ in range(warmup):
+    times = []
+    for _ in range(warmup + iterations):
+        start = time.perf_counter()
         run(feeds)
-    start = time.perf_counter()
-    for _ in range(iterations):
-        run(feeds)
-    return (time.perf_counter() - start) * 1e3 / iterations
+        times.append((time.perf_counter() - start) * 1e3)
+    return float(np.median(times[warmup:]))
 
 
 def check_export(
@@ -155,7 +156,10 @@ def check_export(
         artifacts.append(("pth", pth, model_precision(pth_model), runner, f"PyTorch on {device}"))
     if onnx_path:
         stored, _ = onnx_precision(onnx.load(str(onnx_path), load_external_data=False))
-        artifacts.append(("onnx", onnx_path, stored, _onnx_runner(onnx_path, provider, output_names), provider))
+        if stored == "bf16":
+            logger.warning(f"{onnx_path} is not run: ONNX Runtime has no bf16 kernels; its engine covers it")
+        else:
+            artifacts.append(("onnx", onnx_path, stored, _onnx_runner(onnx_path, provider, output_names), provider))
     if engine:
         precision = (engine_meta or {}).get("precision")
         if precision is None:

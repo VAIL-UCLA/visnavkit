@@ -22,7 +22,7 @@ SMALL = [
 ]
 
 
-@pytest.mark.parametrize("precision", ["fp32", "fp16"])
+@pytest.mark.parametrize("precision", ["fp32", "fp16", "bf16"])
 def test_engine_matches_the_pytorch_reference(tmp_path, precision):
     from visnavkit.export.check import check_export
     from visnavkit.export.graph import export_onnx
@@ -32,9 +32,10 @@ def test_engine_matches_the_pytorch_reference(tmp_path, precision):
     with initialize_config_module(version_base=None, config_module="visnavkit.configs"):
         cfg = compose(config_name="export", overrides=SMALL)
     path = tmp_path / "policy.onnx"
-    export_onnx(cfg, path, precision=precision)  # strongly typed builders take the graph's precision
+    export_onnx(cfg, path, precision=precision)
+    meta = build_engine(path, workspace_gb=1)  # strongly typed: the engine computes at the graph's precision
     engine = tmp_path / f"policy.{precision}.engine"
-    meta = build_engine(path, engine, workspace_gb=1)
+    assert meta["engine"] == str(engine) and engine.exists()
     print_engine_summary(meta)
     assert meta["precision"] == precision and meta["io"]["vision"]["shape"][0] == 1
     assert {spec["dtype"] for spec in meta["io"].values()} == {"float"}

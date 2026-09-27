@@ -119,11 +119,11 @@ newest decision back. `NavigationPolicy` traces `predict` with presence-driven i
 `FlowPilotDST` traces `deploy`, the window in and the current frame's top-k plans out
 ([contract](flowpilot_dst_onnx.md)). `export/graph.py` folds the model (FastViT branches,
 Linear-BatchNorm, RMSNorm), traces at fixed shapes with the MHA fast path disabled, casts the
-weights to `precision` (`fp32` | `fp16`, io stays fp32), verifies ONNX Runtime parity and writes
+weights to `precision` (`fp32` | `fp16` | `bf16`, io stays fp32), verifies ONNX Runtime parity and writes
 `.pth` (weights + config), `.metadata.json` and `.inputs.npz` beside the graph. `export/trt.py`
-builds a TensorRT engine at the graph's precision (TensorRT 11 is strongly typed); `export/check.py`
+builds a strongly typed TensorRT engine, which computes at the graph's precision; `export/check.py`
 replays the traced inputs through checkpoint, `.pth`, ONNX Runtime and engine at each precision's
-tolerance. `benchmark/export.py` traces the full window and outputs `trajectories`, `scores` (plus
+tolerance ([export guide](export.md)). `benchmark/export.py` traces the full window and outputs `trajectories`, `scores` (plus
 `speed`) for latency and open-loop measurements.
 
 ## Add a component

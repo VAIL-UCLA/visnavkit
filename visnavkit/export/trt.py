@@ -1,9 +1,9 @@
-"""TensorRT 10: build an engine from an ONNX graph and run it through plain ``libcudart`` buffers.
+"""TensorRT (10 or newer): build an engine from an ONNX graph and run it through plain ``libcudart`` buffers.
 
 ``tensorrt`` is not a dependency: ``uv pip install --python .venv tensorrt-cu12`` (``tensorrt-cu13`` on a CUDA 13
 driver) adds it; the runner loads the CUDA runtime library through ctypes, so neither building nor running an
-engine needs a CUDA-enabled PyTorch. An engine is bound to the GPU, TensorRT version and precision it
-was built with.
+engine needs a CUDA-enabled PyTorch. Engines are strongly typed: one computes at the precision its graph stores
+(``visnavkit-export precision=fp32|fp16|bf16``) and is bound to the GPU and TensorRT version that built it.
 """
 
 import ctypes
@@ -18,7 +18,7 @@ import numpy as np
 import onnx
 
 from visnavkit.export.artifacts import describe, write_metadata
-from visnavkit.export.precision import ENGINE_PRECISIONS, check_precision, onnx_precision
+from visnavkit.export.precision import check_precision, onnx_precision
 from visnavkit.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -43,39 +43,28 @@ def _logger(trt, verbose=False):
     return _STATE["logger"]
 
 
-def build_engine(onnx_path, output, *, precision=None, tf32=False, workspace_gb=4.0, verbose=False):
-    """Parse ``onnx_path``, build the engine and write it plus ``<output>.metadata.json``.
+def build_engine(onnx_path, output=None, *, tf32=False, workspace_gb=4.0, verbose=False):
+    """Parse ``onnx_path``, build the engine (default ``<onnx stem>.<precision>.engine``) and write it plus
+    ``<engine>.metadata.json``; returns the metadata.
 
-    ``precision`` is the engine's compute dtype, by default the graph's stored one. TensorRT 11 builds strongly
-    typed engines, so it must equal the graph's: export the ONNX at that precision. TensorRT 10 can still cast an
-    fp32 graph to fp16 / bf16 with a builder flag. io keeps the graph's dtypes. An fp32 engine is exact fp32
-    unless ``tf32`` lets its matmuls / convolutions run on tensor cores at 10 mantissa bits (TensorRT's own
-    default; same speed on small models, a visible feature drift). Graphs keep their fixed export shapes.
+    The engine computes at the graph's stored precision and keeps its io dtypes and fixed shapes. An fp32 engine
+    is exact fp32 unless ``tf32`` lets its matmuls / convolutions run on tensor cores at 10 mantissa bits
+    (TensorRT's own default; same speed on small models, a visible feature drift).
     """
     trt = _tensorrt()
-    onnx_path, output = Path(onnx_path), Path(output)
-    stored, _ = onnx_precision(onnx.load(str(onnx_path), load_external_data=False))
-    precision = check_precision(precision or stored, ENGINE_PRECISIONS)
-    flags = []
-    if precision != stored:
-        if not hasattr(trt.BuilderFlag, "FP16"):
-            raise ValueError(
-                f"TensorRT {trt.__version__} builds strongly typed engines: {onnx_path} stores {stored} weights,"
-                f" so export the ONNX with precision={precision} instead of casting here"
-            )
-        flags = [trt.BuilderFlag.FP16 if precision == "fp16" else trt.BuilderFlag.BF16]
+    onnx_path = Path(onnx_path)
+    precision = check_precision(onnx_precision(onnx.load(str(onnx_path), load_external_data=False))[0])
+    output = Path(output) if output else onnx_path.with_suffix(f".{precision}.engine")
     output.parent.mkdir(parents=True, exist_ok=True)
     trt_logger = _logger(trt, verbose)
     builder = trt.Builder(trt_logger)
-    network = builder.create_network(0)  # explicit batch, the only mode in TensorRT 10
+    network = builder.create_network(1 << int(trt.NetworkDefinitionCreationFlag.STRONGLY_TYPED))
     parser = trt.OnnxParser(network, trt_logger)
     if not parser.parse_from_file(str(onnx_path)):
         errors = "\n".join(str(parser.get_error(i)) for i in range(parser.num_errors))
         raise ValueError(f"TensorRT could not parse {onnx_path}:\n{errors}")
     config = builder.create_builder_config()
     config.set_memory_pool_limit(trt.MemoryPoolType.WORKSPACE, int(workspace_gb * 2**30))
-    for flag in flags:
-        config.set_flag(flag)
     if not tf32:
         config.clear_flag(trt.BuilderFlag.TF32)
     tf32 = tf32 and precision == "fp32"
@@ -95,12 +84,10 @@ def build_engine(onnx_path, output, *, precision=None, tf32=False, workspace_gb=
     meta = {
         "onnx": source["path"],
         "onnx_sha256": source["sha256"],
+        "engine": str(output),
         "engine_sha256": describe(output)["sha256"],
         "engine_bytes": output.stat().st_size,
         "precision": precision,
-        "graph_precision": stored,
-        "builder_flags": [flag.name for flag in flags],
-        "strongly_typed": not flags,
         "tf32": tf32,
         "tensorrt": trt.__version__,
         "gpu": gpu_name(),

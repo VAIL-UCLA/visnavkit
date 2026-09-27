@@ -1,7 +1,7 @@
 """Run the deployment path end to end on random weights: checkpoint -> ONNX -> TensorRT engine -> check.
 
     uv run visnavkit-export-smoke model=gnm                              # fp32 ONNX, fp32 engine, CPU reference
-    uv run visnavkit-export-smoke model=gnm --precision fp16              # fp16 ONNX and engine
+    uv run visnavkit-export-smoke model=gnm --precision fp16              # fp16 ONNX and engine (or bf16)
     uv run visnavkit-export-smoke model=gnm --no-engine                  # without TensorRT
 
 Positional arguments are Hydra overrides on the export config. Parity is reported, not enforced: random weights
@@ -15,7 +15,7 @@ from pathlib import Path
 import torch
 from hydra import compose, initialize_config_module
 
-from visnavkit.export.precision import ENGINE_PRECISIONS, ONNX_PRECISIONS
+from visnavkit.export.precision import PRECISIONS
 from visnavkit.export.smoke import export_smoke
 from visnavkit.models.lit_model import disable_pretrained_downloads
 
@@ -24,10 +24,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("overrides", nargs="*", help="Hydra overrides, e.g. model=gnm model/action_decoder=mhp")
     parser.add_argument("--output-dir", type=Path, default=Path("outputs/export_smoke"))
-    parser.add_argument("--precision", choices=ONNX_PRECISIONS, default="fp32", help="ONNX weight dtype")
-    parser.add_argument(
-        "--engine-precision", choices=ENGINE_PRECISIONS, default=None, help="Default: the ONNX precision (TensorRT 11)"
-    )
+    parser.add_argument("--precision", choices=PRECISIONS, default="fp32", help="ONNX and engine weight dtype")
     parser.add_argument("--no-engine", action="store_true", help="Skip the TensorRT build")
     parser.add_argument("--batch-size", type=int, default=1)
     parser.add_argument("--iterations", type=int, default=10, help="Latency samples per backend; 0 skips timing")
@@ -44,7 +41,6 @@ def main(argv=None):
         cfg,
         args.output_dir,
         precision=args.precision,
-        engine_precision=args.engine_precision,
         engine=not args.no_engine,
         batch_size=args.batch_size,
         iterations=args.iterations,
