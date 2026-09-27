@@ -18,7 +18,7 @@ from visnavkit.export.artifacts import (
     compare_outputs,
     describe,
     load_model,
-    mha_fastpath_disabled,
+    exact_reference,
     onnx_session,
     read_metadata,
     run_onnx,
@@ -36,7 +36,7 @@ def _torch_runner(wrapper, input_names, output_names, device):
 
     @torch.no_grad()
     def run(feeds):
-        with mha_fastpath_disabled():
+        with exact_reference():
             outputs = wrapper(*[torch.as_tensor(feeds[name]).to(device) for name in input_names])
         return {
             name: (value.float() if value.is_floating_point() else value).cpu().numpy()

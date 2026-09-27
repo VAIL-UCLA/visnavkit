@@ -20,7 +20,7 @@ from visnavkit.export.artifacts import (
     finalize_export,
     instantiate_model,
     load_model,
-    mha_fastpath_disabled,
+    exact_reference,
 )
 from visnavkit.export.precision import check_precision
 from visnavkit.models.action.outputs import parse_plan_output as parse_tensor_plan_output
@@ -181,7 +181,7 @@ def export_onnx(
     )
     logger.info("Export inputs: " + ", ".join(f"{name}{tuple(t.shape)}" for name, t in zip(input_names, inputs)))
 
-    with mha_fastpath_disabled():
+    with exact_reference():
         with torch.no_grad():
             reference = wrapper(*inputs)
         if len(reference) != len(output_names):

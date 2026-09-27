@@ -240,3 +240,12 @@ def test_a_checkpoint_loads_without_the_files_its_recipe_was_initialized_from(tm
         "head": {"anchors_path": None, "route": {"weights": None}},
         "other": {"anchors_path": str(kept)},
     }
+
+
+def test_the_reference_runs_in_exact_float32_whatever_the_session_asked_for():
+    from visnavkit.export.artifacts import exact_reference
+
+    torch.set_float32_matmul_precision("medium")
+    with exact_reference():
+        assert torch.get_float32_matmul_precision() == "highest" and not torch.backends.mha.get_fastpath_enabled()
+    assert torch.get_float32_matmul_precision() == "medium"

@@ -85,14 +85,17 @@ def default_device():
 
 
 @contextmanager
-def mha_fastpath_disabled():
-    """Trace and compare with the same attention kernels: the MHA fast path is not traceable."""
-    fastpath = torch.backends.mha.get_fastpath_enabled()
+def exact_reference():
+    """PyTorch as the fp32 reference: the MHA fast path is not traceable, and a ``float32_matmul_precision``
+    below ``highest`` (the train script sets ``medium``) lets AMX CPUs run float32 matmuls in bf16."""
+    fastpath, matmul = torch.backends.mha.get_fastpath_enabled(), torch.get_float32_matmul_precision()
     torch.backends.mha.set_fastpath_enabled(False)
+    torch.set_float32_matmul_precision("highest")
     try:
         yield
     finally:
         torch.backends.mha.set_fastpath_enabled(fastpath)
+        torch.set_float32_matmul_precision(matmul)
 
 
 def onnx_session(path, provider="CPUExecutionProvider", optimize=True):
