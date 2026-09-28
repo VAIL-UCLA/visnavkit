@@ -77,6 +77,32 @@ u, v_px = fx * xn * s + cx, fy * yn * s + cy
 ```
 For a pinhole camera (`cam_type` 0) drop the `s` factor.
 
+## Streaming export
+
+`streaming=true` exports the same model as one call per frame. The past slots' temporal inputs are
+carried in a buffer, so the backbone and the route encoder run on the current frame only, and only
+the current frame's plan is decoded. Its decision equals the window graph's (checked at export:
+20 streamed frames from an empty buffer against one window call).
+
+```bash
+uv run visnavkit-export-dst checkpoint=<ckpt> streaming=true output=flowpilot_dst_streaming.onnx
+```
+
+| input | shape | meaning |
+| --- | --- | --- |
+| `vision` | (1, P, 3, 216, 384) | the current frame, prepared as above. P = 2 for the pair encoder (FlowPilot-DST): [previous frame, current], with the previous frame all zeros when there is none, as the first slot of a training window. P = 1 for a single-frame encoder (FlowPilot-DUNE-DST). |
+| `route_patch` | (1, 1, 80, 80) | the current route patch |
+| `goal` | (1, 1, 3) | the current goal |
+| `ego` | (1, 1, 2) | the current `[v, w]` |
+| `action_bounds` | (1, 2, 5) | as above |
+| `feat_buffer` | (1, 19, F) | the previous 19 frames' temporal inputs, oldest first: the last call's `feat_buffer_out`. Zeros at startup. F = 768 (FlowPilot-DST), 2048 (FlowPilot-DUNE-DST). |
+| `buffer_mask` | (1, 19) | 1 where `feat_buffer` holds a frame, 0 elsewhere: the last call's `buffer_mask_out`. Zeros at startup. |
+
+The outputs are `modes`, `probs` and `speed` as above, plus `feat_buffer_out` (1, 19, F) and
+`buffer_mask_out` (1, 19). Feed these two back unchanged on the next call.
+
+The buffer assumes the 50 ms frame spacing. After a gap or a restart, reset it to zeros.
+
 ## Performance and checks
 
 - **Parity:** the export asserts PyTorch/ONNX agreement on the traced window (rtol 2e-3, atol 2e-4)
