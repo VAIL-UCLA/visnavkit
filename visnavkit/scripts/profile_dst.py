@@ -13,9 +13,9 @@ import time
 
 import hydra
 import torch
-from omegaconf import DictConfig, OmegaConf
+from omegaconf import DictConfig
 
-from visnavkit.benchmark.export import load_native_model
+from visnavkit.models.checkpoint import load_checkpoint, load_model
 from visnavkit.scripts.export import reparameterize_model
 from visnavkit.scripts.export_dst import example_inputs
 from visnavkit.utils.display import source
@@ -192,14 +192,8 @@ def profile(model, inputs, device, warmup, iters, euler_steps):
 @hydra.main(version_base=None, config_path="../configs", config_name="profile_dst")
 def main(cfg: DictConfig):
     device = cfg.device
-    run_cfg = cfg
-    if cfg.checkpoint:
-        saved = (
-            torch.load(cfg.checkpoint, map_location="cpu", weights_only=False).get("hyper_parameters", {}).get("cfg")
-        )
-        if saved is not None:
-            run_cfg = OmegaConf.create(saved) if isinstance(saved, dict) else saved
-    model = load_native_model(run_cfg, cfg.checkpoint).to(device)
+    model, run_cfg = load_checkpoint(cfg.checkpoint, cfg) if cfg.checkpoint else (load_model(cfg), cfg)
+    model = model.to(device)
     inputs = [x.to(device) for x in example_inputs(run_cfg, 1)]
     t, hw = inputs[0].shape[1], tuple(inputs[0].shape[-2:])
     print(

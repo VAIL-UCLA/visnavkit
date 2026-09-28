@@ -1,7 +1,7 @@
 # FlowMatchingPolicy (visnavkit.models.flow_matching_policy): RGB FastViT-SA12 per 20 Hz slot -> global average-pooled
-# feature; [global | route VAE latent] each Linear -> LayerNorm -> causal temporal attention (past-slot drop 0.1) -> the
-# temporal feature is the one kv token of StepFlowHead (flow matching from noise, one query per plan step + step
-# position + ego [v, w], each ego channel hidden w.p. 0.9). Every slot with a frame is supervised. Needs pose_size 5
+# feature; [global | route VAE latent] each Linear -> LayerNorm -> causal temporal attention (past-slot drop 0.1). The
+# head's kv: [fused temporal | global | route | patches] tokens, for StepFlowHead (flow matching from noise, one query
+# per plan step + step position + ego [v, w], each ego channel hidden w.p. 0.9). Every slot with a frame is supervised. Needs pose_size 5
 # targets, `ego` starting with [speed, yaw_rate] and action bounds (configs/experiment/flow_matching_policy_clips1k.yaml).
 defaults:
   - frame_encoder: fastvit_sa12  # dune: the frozen DUNE ViT-B/14, as flowpilot_dune_dst

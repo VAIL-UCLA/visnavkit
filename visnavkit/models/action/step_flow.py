@@ -7,7 +7,8 @@ Linear(x_t step) + learned step position + the ego [v, w] embedding (each channe
 training); ``num_layers`` DiT blocks [adaLN-Zero(time) self-attention over the steps, cross-attention to the frame's kv,
 FF] -> the output per step. Loss: MSE in the loss space, summed over the 5 channels. Inference: ``sample_steps``
 scheduler steps from noise 0 (one deterministic plan) or from N(0, I) draws (``num_samples`` plans, equal
-probabilities: no scorer).
+probabilities: no scorer). Without a ``scheduler`` (configs saved before it existed) the head runs the original
+flow: t = 0 noise, 1 data, the velocity x0 - eps, ``sample_steps`` Euler steps up from 0.
 """
 
 import torch
@@ -27,7 +28,7 @@ class StepFlowHead(nn.Module):
     def __init__(
         self,
         dim,
-        scheduler,
+        scheduler=None,
         num_pts=80,
         num_layers=4,
         num_heads=8,
@@ -69,6 +70,12 @@ class StepFlowHead(nn.Module):
         kv = self.kv_norm(kv)
         x0 = self.norm(actions, bounds)
         noise = torch.randn_like(x0)
+        if self.scheduler is None:  # the original flow: t = 0 noise, 1 data, velocity x0 - eps
+            t = torch.rand(len(kv), device=kv.device)
+            x_t = (1 - t)[:, None, None] * noise + t[:, None, None] * x0
+            ego = self.ego(self.ego_cond(ego_vw, bounds)).to(kv.dtype)
+            v = F.mse_loss(self.denoise(x_t, t, kv, ego).float(), x0 - noise, reduction="none").sum(-1).mean()
+            return dict(total=v, reg=v)
         t = self.scheduler.sample_t(len(kv), kv.device)
         x_t = self.scheduler.add_noise(x0, noise, t)
         ego = self.ego(self.ego_cond(ego_vw, bounds)).to(kv.dtype)
@@ -86,7 +93,13 @@ class StepFlowHead(nn.Module):
         kv, bounds, ego_vw = (v.repeat_interleave(s, 0) for v in (kv, bounds, ego_vw))
         kv = self.kv_norm(kv)
         ego = self.ego(self.ego_cond(ego_vw, bounds)).to(kv.dtype)
-        x, times = noise.flatten(0, 1).float(), self.scheduler.step_times(self.sample_steps)
+        x = noise.flatten(0, 1).float()
+        if self.scheduler is None:  # the original flow: Euler from t = 0 (noise) to 1
+            dt = 1.0 / self.sample_steps
+            for i in range(self.sample_steps):
+                x = x + dt * self.denoise(x, x.new_full((n * s,), i * dt), kv, ego).float()
+            return self.metric(x, bounds).view(n, s, self.num_pts, self.pose_size)
+        times = self.scheduler.step_times(self.sample_steps)
         for t, t_next in zip(times[:-1], times[1:]):
             t, t_next = x.new_full((n * s,), t), x.new_full((n * s,), t_next)
             x = self.scheduler.step(self.denoise(x, t, kv, ego).float(), x, t, t_next)

@@ -7,12 +7,11 @@ from pathlib import Path
 
 import numpy as np
 import torch
-from hydra.utils import instantiate
 from omegaconf import OmegaConf
 from torch import nn
 from torch.utils.flop_counter import FlopCounterMode
 
-from visnavkit.models.lit_model import disable_pretrained_downloads
+from visnavkit.models.checkpoint import disable_pretrained_downloads, load_model, read, saved_config
 from visnavkit.utils.common import anchor_times
 
 
@@ -38,21 +37,6 @@ def architecture_config(model_cfg):
     """Resolved model config without initialization-only fields, for checkpoint/recipe comparison."""
     model_cfg = disable_pretrained_downloads(copy.deepcopy(model_cfg))
     return OmegaConf.to_container(model_cfg, resolve=True)
-
-
-def load_native_model(cfg, checkpoint=None):
-    cfg = copy.deepcopy(cfg)
-    if checkpoint is not None:
-        # Loading a complete checkpoint must not fetch backbone initialization weights.
-        disable_pretrained_downloads(cfg.model)
-    model = instantiate(cfg.model)
-    if checkpoint is not None:
-        loaded = torch.load(checkpoint, map_location="cpu", weights_only=False)
-        weights = loaded.get("state_dict", loaded)
-        if any(key.startswith("model.") for key in weights):
-            weights = {key.removeprefix("model."): value for key, value in weights.items() if key.startswith("model.")}
-        model.load_state_dict(weights, strict=True)
-    return model.cpu().eval()
 
 
 class SequencePolicy(nn.Module):
@@ -100,17 +84,15 @@ def export_native(cfg, output, *, checkpoint=None, seed=42, batch_size=1, model_
     cfg = copy.deepcopy(cfg)
     checkpoint_path = Path(checkpoint) if checkpoint else None
     if checkpoint_path:
-        stored = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
-        saved_cfg = stored.get("hyper_parameters", {}).get("cfg")
+        saved_cfg = saved_config(read(checkpoint_path))
         if saved_cfg is not None:
-            saved_cfg = OmegaConf.create(saved_cfg) if isinstance(saved_cfg, dict) else saved_cfg
             if architecture_config(cfg.model) != architecture_config(saved_cfg.model):
                 raise ValueError(
                     "Checkpoint model config differs from the requested recipe. Compose its original model/config to avoid mislabeled benchmarks."
                 )
             cfg = saved_cfg
     torch.manual_seed(seed)
-    model = load_native_model(cfg, checkpoint_path)
+    model = load_model(cfg, checkpoint_path)
     parameters_total = sum(p.numel() for p in model.parameters())
     parameters_trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
     size = cfg.common

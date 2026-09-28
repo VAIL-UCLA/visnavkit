@@ -22,6 +22,7 @@ from omegaconf import DictConfig, OmegaConf, open_dict
 from torch.nn.utils.fusion import fuse_linear_bn_eval
 
 from visnavkit.models.action.outputs import parse_plan_output as parse_tensor_plan_output
+from visnavkit.models.checkpoint import read, saved_config
 from visnavkit.models.lit_model import LitModel
 from visnavkit.utils.logger import get_logger
 
@@ -118,10 +119,8 @@ def prepare_export_config(cfg):
     """Restore checkpoint architecture/preprocessing while retaining export options."""
     cfg = copy.deepcopy(cfg)
     if cfg.checkpoint:
-        checkpoint = torch.load(cfg.checkpoint, map_location="cpu", weights_only=False)
-        saved = checkpoint.get("hyper_parameters", {}).get("cfg")
+        saved = saved_config(read(cfg.checkpoint))
         if saved is not None:
-            saved = OmegaConf.create(saved)
             options = {key: cfg[key] for key in ("checkpoint", "output", "onnx_opset_version", "half", "export_heads")}
             cfg = OmegaConf.merge(OmegaConf.to_container(saved, resolve=True), options)
     return cfg

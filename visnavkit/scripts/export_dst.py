@@ -17,10 +17,11 @@ import numpy as np
 import onnx
 import onnxruntime as ort
 import torch
-from omegaconf import DictConfig, OmegaConf
+from omegaconf import DictConfig
 from torch import nn
 
-from visnavkit.benchmark.export import load_native_model, sha256_file, target_times
+from visnavkit.benchmark.export import sha256_file, target_times
+from visnavkit.models.checkpoint import load_checkpoint, load_model
 from visnavkit.models.vision.pair_encoder import PairEncoder
 from visnavkit.scripts.export import reparameterize_model
 from visnavkit.utils.logger import get_logger
@@ -170,12 +171,8 @@ def export_dst(
     models whose ``deploy`` takes ``noise``, e.g. FlowMatchingPolicy)."""
     output = Path(output)
     output.parent.mkdir(parents=True, exist_ok=True)
-    cfg = copy.deepcopy(cfg)
-    if checkpoint:
-        stored = torch.load(checkpoint, map_location="cpu", weights_only=False)
-        if (saved := stored.get("hyper_parameters", {}).get("cfg")) is not None:
-            cfg = OmegaConf.create(saved) if isinstance(saved, dict) else saved
-    model = reparameterize_model(load_native_model(cfg, checkpoint))  # fold the FastViT training branches
+    model, cfg = load_checkpoint(checkpoint, cfg) if checkpoint else (load_model(cfg), copy.deepcopy(cfg))
+    model = reparameterize_model(model)  # fold the FastViT training branches
     unfuse_rms_norm(model)
     wrapper = _ExportDST(model, top_k).eval()
     inputs, names, outputs = example_inputs(cfg, batch_size, seed), INPUTS, OUTPUTS

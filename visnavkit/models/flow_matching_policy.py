@@ -19,6 +19,7 @@ from dataclasses import dataclass
 
 import torch
 import torch.nn as nn
+from omegaconf import open_dict
 
 from visnavkit.models.flowpilot_dst import FeatureTokens
 from visnavkit.models.layers.masking import masked_rows
@@ -48,7 +49,7 @@ class FlowMatchingPolicy(nn.Module):
 
     modality_input_names = ["frame_mask", "route_patch", "route_mask", "ego", "action_bounds"]
 
-    def __init__(self, frame_encoder, action_decoder, dim=256, seq_len=20, temporal=None, route=None):
+    def __init__(self, frame_encoder, action_decoder, dim=256, seq_len=20, temporal=None, route=None, single_kv=False):
         super().__init__()
         self.frame_encoder = frame_encoder
         self.route_encoder = RouteEncoder(**dict(route or {}))
@@ -56,8 +57,21 @@ class FlowMatchingPolicy(nn.Module):
         self.route_in = nn.Sequential(nn.Linear(self.route_encoder.dim, dim), nn.LayerNorm(dim))
         self.temporal_encoder = TemporalFusion(2 * dim, dim, seq_len, **dict(temporal or {}))
         c, r = frame_encoder.dim, self.route_encoder.dim
-        self.kv = FeatureTokens({"temporal": dim, "global": c, "route": r, "patch": c}, dim, seq_len, None)
+        self.single_kv = single_kv
+        if single_kv:  # checkpoints from before the token kv: one token, Linear(temporal) + slot embedding
+            self.kv = nn.Linear(dim, dim)
+            self.slot = nn.Parameter(torch.randn(seq_len, dim) * 0.02)
+        else:
+            self.kv = FeatureTokens({"temporal": dim, "global": c, "route": r, "patch": c}, dim, seq_len, None)
         self.action_decoder = action_decoder(dim)  # a partial taking dim, e.g. StepFlowHead
+
+    @staticmethod
+    def legacy_config(model_cfg, weights):
+        """A checkpoint's config from its weights' layout: the single kv token predates the ``single_kv`` key."""
+        if "kv.weight" in weights:
+            with open_dict(model_cfg):
+                model_cfg.single_kv = True
+        return model_cfg
 
     def encode(self, vision, frame_mask=None, route_patch=None, route_mask=None, ego=None, action_bounds=None):
         """-> kv ``(N, 3 + gh gw, D)`` [fused temporal | global | route | patches] of the N slots holding a frame, their
@@ -75,9 +89,11 @@ class FlowMatchingPolicy(nn.Module):
         temporal = self.temporal_encoder(torch.cat([self.global_in(glob), self.route_in(route)], -1), frame_mask)
         idx = masked_rows(frame_mask)
         slot = torch.arange(t, device=device).repeat(b)[idx]
-        rows = lambda f: f.flatten(0, 1)[idx]
-        feats = {"temporal": temporal, "global": glob, "route": route, "patch": patches}
-        kv = self.kv({name: rows(f) for name, f in feats.items()}, slot, None)
+        if self.single_kv:
+            kv = (self.kv(temporal.flatten(0, 1)[idx]) + self.slot[slot])[:, None]
+        else:
+            feats = {"temporal": temporal, "global": glob, "route": route, "patch": patches}
+            kv = self.kv({name: f.flatten(0, 1)[idx] for name, f in feats.items()}, slot, None)
         ego_vw = ego.flatten(0, 1)[idx][:, :2].float()
         bounds = action_bounds.repeat_interleave(t, 0)[idx].float()
         return kv, ego_vw, bounds, idx, frame_mask

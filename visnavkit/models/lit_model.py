@@ -8,11 +8,18 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from hydra.utils import instantiate
-from omegaconf import DictConfig, ListConfig
+from omegaconf import DictConfig
 from torchvision.io import write_png
 
 from visnavkit.data.frame_augs import FrameAugment
 from visnavkit.evaluation.calculators.base_calculator import MetricsCalculatorBase
+from visnavkit.models.checkpoint import (
+    checkpoint_model_config,
+    disable_pretrained_downloads,
+    model_weights,
+    read,
+    saved_config,
+)
 from visnavkit.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -83,22 +90,6 @@ def _route_image(batch, i):
     return torch.cat([frame, patch], -1)
 
 
-def disable_pretrained_downloads(model_cfg: DictConfig) -> DictConfig:
-    """Complete checkpoints carry every weight; skip backbone downloads and initialization files, however nested."""
-    for key, value in model_cfg.items():
-        if key == "pretrained":
-            model_cfg[key] = False
-        elif key == "weights":
-            model_cfg[key] = None
-        elif isinstance(value, DictConfig):
-            disable_pretrained_downloads(value)
-        elif isinstance(value, ListConfig):
-            for item in value:
-                if isinstance(item, DictConfig):
-                    disable_pretrained_downloads(item)
-    return model_cfg
-
-
 def load_pretrained_model_weights(model: torch.nn.Module, pretrained_cfg: DictConfig) -> None:
     if not pretrained_cfg or not pretrained_cfg.get("ckpt_path"):
         return
@@ -106,14 +97,7 @@ def load_pretrained_model_weights(model: torch.nn.Module, pretrained_cfg: DictCo
     ckpt_path = pretrained_cfg.get("ckpt_path")
     strict = pretrained_cfg.get("strict", True)
 
-    ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
-    state_dict = ckpt.get("state_dict", ckpt)
-
-    # Lightning checkpoints store LitModel keys like "model.vision_encoder..."
-    if any(k.startswith("model.") for k in state_dict):
-        state_dict = {k.removeprefix("model."): v for k, v in state_dict.items() if k.startswith("model.")}
-
-    model.load_state_dict(state_dict, strict=strict)
+    model.load_state_dict(model_weights(read(ckpt_path)), strict=strict)
 
 
 @torch.no_grad()
@@ -173,6 +157,11 @@ class LitModel(L.LightningModule):
         # must not trigger downloads or depend on a previous initialization file.
         kwargs["initialize_pretrained"] = False
         kwargs.setdefault("weights_only", False)  # checkpoints store the OmegaConf config
+        stored = read(checkpoint_path)
+        cfg = copy.deepcopy(kwargs.get("cfg") or saved_config(stored))
+        if cfg is not None:  # keys the checkpoint predates, from its weights (the model's legacy_config)
+            cfg.model = checkpoint_model_config(cfg.model, model_weights(stored))
+            kwargs["cfg"] = cfg
         return super().load_from_checkpoint(checkpoint_path, *args, **kwargs)
 
     def _step(self, batch, batch_idx, stage: str):

@@ -13,6 +13,7 @@ visnavkit/models/
 ├── policy.py            NavigationPolicy: forward (training) / predict (deployment)
 ├── outputs.py           VisionOutput, PlanOutput, PolicyOutput
 ├── lit_model.py         Lightning module: targets, losses, metrics, optimizer
+├── checkpoint.py        load_checkpoint: rebuild a model from its checkpoint, older versions included
 ├── normalization.py     Normalizer shared by supervision targets and input signals
 ├── vision/              one RGB frame -> tokens: timm_cnn.py (features_only), timm_vit.py, speed_head.py
 ├── modality/            any non-image input -> per-frame tokens: vector.py, camera.py, none.py

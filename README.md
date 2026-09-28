@@ -22,6 +22,11 @@ for the losses) and `predict` its streaming view (the newest frame plus a featur
 
 [Architecture](docs/architecture.md) · [Data](docs/data.md) · [Models & weights](docs/models.md) · [Benchmark](docs/benchmark.md) · [Roadmap](docs/roadmap.md)
 
+**Contents:** [Install](#install) · [Quick start](#quick-start) · [Models](#models) ([compose](#compose-a-policy),
+[paper recipes](#paper-recipes), [FlowPilot family](#flowpilot-family), [pretrained weights](#pretrained-weights),
+[loading a checkpoint](#loading-a-checkpoint)) · [Data](#data) · [Train](#train) · [Deploy and benchmark](#deploy-and-benchmark)
+· [Development](#development)
+
 ## Install
 
 ```bash
@@ -43,7 +48,9 @@ decision; `--onnx` also exports and verifies ONNX Runtime parity:
 uv run visnavkit-sanity-check model=s2e model/action_decoder=anchor_flow_dit --onnx
 ```
 
-## Compose a policy
+## Models
+
+### Compose a policy
 
 One entry per group, or a recipe plus overrides:
 
@@ -63,7 +70,7 @@ uv run visnavkit-train dataset=torch model=vint \
 Token modes, action spaces, per-signal normalizers and the denoiser × scheduler split behind the
 generative decoders: [architecture](docs/architecture.md).
 
-### Recipes
+### Paper recipes
 
 Paper-named recipes adapt each architecture to this repo's data contract (single RGB frames,
 fixed-horizon x/y/v targets, goals from the episode's own future). They are not reproductions and
@@ -83,6 +90,25 @@ load no upstream checkpoint; `model=base` is the skeleton they inherit.
 | `mimic` | DINOv3 ViT-S | causal x4, 512-d | point + camera token | anchor, 64 anchors |
 | `flowpilot` | FastViT-MA36 + speed head | causal x4, 1280-d | gps, 90% goal dropout | anchored flow DiT (1280, x4), 64 anchors, 4 steps, Beta(1.5, 1) times |
 | `flowpilot_dst` | FastViT-T12 on [frame_t, frame_t-1] + speed head, frozen route VAE; `dataset=pose` 20 Hz slots | causal x2 over the slots, 512-d | point, 50% goal dropout, embodiment token | anchored flow DiT (512, x4, cross-attn only), 64 anchors, 4 steps, modes from noise 0 and one draw |
+
+### FlowPilot family
+
+`flowpilot` is the paper recipe above, a `NavigationPolicy`. The other variants are their own model classes on
+`dataset=pose` windows of 20 Hz slots (frames, route patches, ego [v, w], action bounds) and decide for the current
+slot through `deploy`.
+
+| Variant | Model | Config | Frame encoder | Head |
+| --- | --- | --- | --- | --- |
+| FlowPilot | `NavigationPolicy` | `model=flowpilot` | FastViT-MA36 on frame pairs | anchored flow DiT |
+| FlowPilot-DST | `FlowPilotDST` | `experiment=flowpilot_dst_clips1k`, `flowpilot_dst_tiny`, `flowpilot_dst_overfit` | FastViT-T12 on frame pairs + speed head | anchored flow DiT over per-frame kv tokens |
+| FlowPilot-DUNE-DST | `FlowPilotDST` | `experiment=flowpilot_dune_dst_clips1k` | frozen DUNE ViT-B/14 + adapter | as FlowPilot-DST, at dim 1024 |
+| FlowMatchingPolicy | `FlowMatchingPolicy` | `experiment=flow_matching_policy_clips1k` | `model/frame_encoder=fastvit_sa12` or `dune` | per-step flow (`StepFlowHead`) on a flow or DDIM scheduler |
+| FlowMatchingPolicy, S2E | `FlowMatchingPolicy` | `experiment=flow_matching_policy_s2e_clips1k` | as above | anchors in, trajectories out (`S2EHead`) |
+| FlowMatchingPolicy, FlowBridge | `FlowMatchingPolicy` | `experiment=flow_matching_policy_bridge_clips1k` | as above | anchor-to-trajectory flow (`FlowBridgeHead`) |
+
+Each recipe's yaml under [`configs/model/`](visnavkit/configs/model/) and
+[`configs/experiment/`](visnavkit/configs/experiment/) describes its layers and the files it needs (route VAE,
+k-means anchors, action bounds). The window graph's inputs and outputs: [FlowPilot-DST ONNX](docs/flowpilot_dst_onnx.md).
 
 ### Pretrained weights
 
@@ -109,6 +135,22 @@ uv run visnavkit-train experiment=flowpilot_dune_dst_clips1k \
 Where each paper publishes its own weights, and the published ONNX graphs the benchmark downloads:
 [model catalog](docs/models.md).
 
+### Loading a checkpoint
+
+A checkpoint rebuilds from the config it was trained with, so no recipe needs composing:
+
+```python
+from visnavkit.models.checkpoint import load_checkpoint
+
+model, cfg = load_checkpoint("flowpilot_dst_fastvit_t12.ckpt")  # eval mode, weights loaded strictly
+```
+
+Older checkpoints keep loading. Initialization files that stayed on the training machine (a route VAE, k-means
+anchors) are skipped, since the checkpoint carries those weights. A config key added after a checkpoint was saved takes
+its constructor default, which keeps the old architecture, or is set from the checkpoint's weights where the default
+cannot tell. `LitModel.load_from_checkpoint`, `visnavkit-export`, `visnavkit-export-dst`, `profile_dst` and
+resuming training (`trainer.resume.ckpt_path`) load the same way.
+
 ## Data
 
 A clip is a directory with `video.mp4` and four NumPy sidecars (times, positions, orientations,
@@ -124,22 +166,34 @@ uv run visnavkit-dataset command=anchors dataset=torch num_anchors=64
 Sidecar layout, the opt-in ego and calibration inputs, and the public corpora this format targets:
 [data guide](docs/data.md).
 
-## Train, export, benchmark
+## Train
 
 ```bash
 uv run visnavkit-train dataset=torch model=mimic ema=default
 uv run visnavkit-train-route route=vae                      # route-patch AE/VAE from route_images.npy
-uv run visnavkit-export checkpoint=logs/baseline/.../last.ckpt output=outputs/policy.onnx
-uv run visnavkit-benchmark command=export model=gnm output_dir=outputs/benchmark/gnm
 ```
 
 A route checkpoint seeds the route goal encoder: `model/goal_encoder=route_image
 model.goal_encoder.weights=<ckpt>`. Training records Git provenance (`strict_git=true` requires
 a clean tree) and keeps overrides in
-[`configs/experiment/`](visnavkit/configs/experiment/). The deployment graph streams one frame
-through a feature buffer; the benchmark graph runs the full window for latency and open-loop
-metrics — [architecture](docs/architecture.md#inference-deployment-benchmark),
-[benchmark](docs/benchmark.md).
+[`configs/experiment/`](visnavkit/configs/experiment/).
+
+## Deploy and benchmark
+
+```bash
+uv run visnavkit-export checkpoint=logs/baseline/.../last.ckpt output=outputs/policy.onnx
+uv run visnavkit-export-dst checkpoint=<ckpt> output=flowpilot_dst.onnx [streaming=true]
+uv run python -m visnavkit.scripts.profile_dst checkpoint=<ckpt>
+uv run visnavkit-benchmark command=export model=gnm output_dir=outputs/benchmark/gnm
+```
+
+- `visnavkit-export`: the `NavigationPolicy` deployment graph, which streams one frame through a feature buffer.
+- `visnavkit-export-dst`: the FlowPilot-DST / FlowMatchingPolicy window graph. `streaming=true` takes one frame per
+  call plus a buffer of the past slots (FlowPilot-DST); `noise=randn` adds a noise input (FlowMatchingPolicy).
+- `profile_dst`: FlowPilot-DST sanity checks and per-stage latency.
+- `visnavkit-benchmark`: the full window, for latency and open-loop metrics.
+
+More in [architecture](docs/architecture.md#inference-deployment-benchmark) and [benchmark](docs/benchmark.md).
 
 ## Development
 

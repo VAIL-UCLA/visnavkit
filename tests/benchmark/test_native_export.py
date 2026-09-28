@@ -57,8 +57,10 @@ def test_complete_checkpoint_does_not_load_component_initialization_weights(tmp_
         assert model_cfg.goal_encoder.pretrained is False
         return torch.nn.Identity()
 
-    monkeypatch.setattr(benchmark_export, "instantiate", fake_instantiate)
-    model = benchmark_export.load_native_model(cfg, checkpoint)
+    from visnavkit.models import checkpoint as checkpoints
+
+    monkeypatch.setattr(checkpoints, "instantiate", fake_instantiate)
+    model = checkpoints.load_model(cfg, checkpoint)
     assert not model.training
     assert cfg.model.vision_encoder.weights == "old-vision.pt"
 

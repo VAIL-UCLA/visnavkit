@@ -35,6 +35,8 @@ of goals, and connects its stages with tokens of width `feat_size`:
 - `models/action` decodes trajectories; generative decoders are a denoiser x a scheduler.
 - `models/normalization.py` one `Normalizer` (`none|meanstd|minmax|scale`), used separately by
   supervision targets and by each input encoder.
+- `models/checkpoint.py` loads every checkpoint. A new config key keeps old checkpoints loading: its
+  constructor default reproduces the old model, or the model's `legacy_config` sets it from the weights.
 
 Hydra groups mirror that layout under `visnavkit/configs/model/`. Full contracts:
 [docs/architecture.md](docs/architecture.md).

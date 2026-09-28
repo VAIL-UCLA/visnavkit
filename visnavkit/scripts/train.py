@@ -10,6 +10,7 @@ from hydra.utils import instantiate
 from lightning.pytorch.callbacks import LearningRateMonitor, ModelCheckpoint
 from omegaconf import DictConfig, OmegaConf, open_dict
 
+from visnavkit.models.checkpoint import legacy_model_config, model_weights, read
 from visnavkit.models.lit_model import LitModel
 from visnavkit.utils.display import display_callbacks
 
@@ -62,7 +63,9 @@ def main(cfg: DictConfig):
     L.seed_everything(cfg.seed, workers=True)
     datamodule = instantiate(cfg.dataset)
     trainer = create_trainer(cfg)
-    model = LitModel(cfg, initialize_pretrained=not bool(cfg.trainer.resume.ckpt_path))
+    if resume := cfg.trainer.resume.ckpt_path:  # a checkpoint older than a config key: set it from the weights
+        cfg.model = legacy_model_config(cfg.model, model_weights(read(resume)))
+    model = LitModel(cfg, initialize_pretrained=not bool(resume))
     trainer.fit(model, datamodule=datamodule, ckpt_path=cfg.trainer.resume.ckpt_path)
 
 
