@@ -3,6 +3,87 @@
 Research identity is recorded separately from this repository's architecture adaptations.
 **Downloadable ONNX artifacts are not yet validated open-loop policy adapters.**
 
+## Recipes
+
+Paper-named recipes adapt each architecture to this repo's data contract (single RGB frames,
+fixed-horizon x/y/v targets, goals from the episode's own future). They are not reproductions and
+load no upstream checkpoint; `model=base` is the skeleton they inherit.
+
+| Recipe | Vision | Temporal | Goal | Decoder |
+| --- | --- | --- | --- | --- |
+| `gnm` | MobileNetV2 | single frame | image (stacked with observation) | regression |
+| `vint` | EfficientNet-B0 | causal x4, 512-d, 4 heads | image (stacked) | regression |
+| `nomad` | EfficientNet-B0 | causal x4, 256-d | image, 50% goal dropout | diffusion U-Net, 10 steps, 8 candidates |
+| `citywalker` | DINOv2 ViT-B (frozen) | causal x16, 768-d | point + past odometry | regression |
+| `mbra` | EfficientNet-B0 | causal x4, 1024-d, 4 heads | gps | regression |
+| `navdp` | DINOv2 ViT-S | causal x2, 384-d | point | diffusion DiT (384, x16), 10 steps, 16 candidates |
+| `s2e` | DINOv3 ViT-S | causal x6, 768-d | point, 55% goal dropout | anchor, 64 k-means anchors |
+| `socialnav` | SigLIP ViT-B/16 (frozen VLM tower) | causal x1, 1536-d | point + past positions | flow DiT (1536, x12), 5 steps |
+| `internvla_n1` | DINOv2 ViT-S | causal x1 | instruction (System 2 latent, 4 tokens) | flow DiT (384, x12), 10 steps |
+| `mimic` | DINOv3 ViT-S | causal x4, 512-d | point + camera token | anchor, 64 anchors |
+| `flowpilot` | FastViT-MA36 + speed head | causal x4, 1280-d | gps, 90% goal dropout | anchored flow DiT (1280, x4), 64 anchors, 4 steps, Beta(1.5, 1) times |
+| `flowpilot_dst` | FastViT-T12 on [frame_t, frame_t-1] + speed head, frozen route VAE; `dataset=pose` 20 Hz slots | causal x2 over the slots, 512-d | point, 50% goal dropout, embodiment token | anchored flow DiT (512, x4, cross-attn only), 64 anchors, 4 steps, modes from noise 0 and one draw |
+
+## FlowPilot family
+
+`flowpilot` is the paper recipe in the table above, a `NavigationPolicy`. The other variants are their own model classes on
+`dataset=pose` windows of 20 Hz slots (frames, route patches, ego [v, w], action bounds) and decide for the current
+slot through `deploy`.
+
+| Variant | Model | Config | Frame encoder | Head |
+| --- | --- | --- | --- | --- |
+| FlowPilot | `NavigationPolicy` | `model=flowpilot` | FastViT-MA36 on frame pairs | anchored flow DiT |
+| FlowPilot-DST | `FlowPilotDST` | `experiment=flowpilot_dst_clips1k`, `flowpilot_dst_tiny`, `flowpilot_dst_overfit` | FastViT-T12 on frame pairs + speed head | anchored flow DiT over per-frame kv tokens |
+| FlowPilot-DUNE-DST | `FlowPilotDST` | `experiment=flowpilot_dune_dst_clips1k` | frozen DUNE ViT-B/14 + adapter | as FlowPilot-DST, at dim 1024 |
+| FlowMatchingPolicy | `FlowMatchingPolicy` | `experiment=flow_matching_policy_clips1k` | `model/frame_encoder=fastvit_sa12` or `dune` | per-step flow (`StepFlowHead`) on a flow or DDIM scheduler |
+| FlowMatchingPolicy, S2E | `FlowMatchingPolicy` | `experiment=flow_matching_policy_s2e_clips1k` | as above | anchors in, trajectories out (`S2EHead`) |
+| FlowMatchingPolicy, FlowBridge | `FlowMatchingPolicy` | `experiment=flow_matching_policy_bridge_clips1k` | as above | anchor-to-trajectory flow (`FlowBridgeHead`) |
+
+Each recipe's yaml under [`configs/model/`](../visnavkit/configs/model/) and
+[`configs/experiment/`](../visnavkit/configs/experiment/) describes its layers and the files it needs (route VAE,
+k-means anchors, action bounds). The window graph's inputs and outputs: [FlowPilot-DST ONNX](flowpilot_dst_onnx.md).
+
+## Pretrained weights
+
+One row per deployable variant: the paper authors' **official** weights, a VisNavKit
+**reproduced-ckpt**, and its `visnavkit-export` **reproduced-onnx**, hosted in the
+[model zoo](https://huggingface.co/UCLA-VAIL/Visual-Navigation-Model-Checkpoints).
+
+| Weights | Config | Model | Checkpoints (official) | Checkpoints (reproduced-ckpt) | Checkpoints (reproduced-onnx) |
+| --- | --- | --- | --- | --- | --- |
+| `gnm-point` | `gnm` + point goal | MobileNetV2 -> regression, 3.5M | — | — | — |
+| `flowpilot-edge` | `flowpilot` | FastViT-MA36 -> anchored flow DiT, 300M | — | — | — |
+| `flowpilot-dst-small` | `flowpilot_dst_clips1k` | FastViT-T12 pairs -> anchored flow DiT (256, x2), 21.4M ([ONNX IO](flowpilot_dst_onnx.md)) | — | [ckpt](https://huggingface.co/UCLA-VAIL/Visual-Navigation-Model-Checkpoints/resolve/main/flowpilot-dst-small/flowpilot_dst_fastvit_t12.ckpt) | [onnx](https://huggingface.co/UCLA-VAIL/Visual-Navigation-Model-Checkpoints/resolve/main/flowpilot-dst-small/flowpilot_dst_fastvit_t12.onnx) |
+| `flowpilot-dst-dune` | `flowpilot_dune_dst_clips1k` | frozen DUNE ViT-B/14 -> anchored flow DiT (1024, x2), 208.2M ([ONNX IO](flowpilot_dst_onnx.md)) | — | [ckpt](https://huggingface.co/UCLA-VAIL/Visual-Navigation-Model-Checkpoints/resolve/main/flowpilot-dst-dune/flowpilot_dst_dune_vitb14.ckpt) | [onnx](https://huggingface.co/UCLA-VAIL/Visual-Navigation-Model-Checkpoints/resolve/main/flowpilot-dst-dune/flowpilot_dst_dune_vitb14.onnx) |
+
+```bash
+uv run visnavkit-train dataset=torch model=gnm model/goal_encoder=point \
+  ~model.goal_encoder.backbone_name ~model.goal_encoder.stack_observation  # gnm-point
+uv run visnavkit-train dataset=torch model=flowpilot                       # flowpilot-edge
+uv run visnavkit-train experiment=flowpilot_dst_clips1k                   # flowpilot-dst-small
+uv run visnavkit-train experiment=flowpilot_dune_dst_clips1k \
+  model.frame_encoder.weights=<DUNE ViT-B/14 ckpt>                        # flowpilot-dst-dune
+```
+
+Where each paper publishes its own weights: [Weights](#weights). The published ONNX graphs the benchmark
+downloads: [Published exports](#published-exports).
+
+## Loading a checkpoint
+
+A checkpoint rebuilds from the config it was trained with, so no recipe needs composing:
+
+```python
+from visnavkit.models.checkpoint import load_checkpoint
+
+model, cfg = load_checkpoint("flowpilot_dst_fastvit_t12.ckpt")  # eval mode, weights loaded strictly
+```
+
+Older checkpoints keep loading. Initialization files that stayed on the training machine (a route VAE, k-means
+anchors) are skipped, since the checkpoint carries those weights. A config key added after a checkpoint was saved takes
+its constructor default, which keeps the old architecture, or is set from the checkpoint's weights where the default
+cannot tell. `LitModel.load_from_checkpoint`, `visnavkit-export`, `visnavkit-export-dst`, `profile_dst` and
+resuming training (`trainer.resume.ckpt_path`) load the same way.
+
 ## Published exports
 
 The [UCLA-VAIL model zoo](https://huggingface.co/UCLA-VAIL/Navigation-Model-Zoo-Public) holds
