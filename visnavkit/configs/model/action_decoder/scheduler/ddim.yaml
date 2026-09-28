@@ -7,3 +7,6 @@ beta_end: 0.02
 # [-1, 1] data). It bounds the 1/sqrt(alpha_bar) term near t=1; raise it or set null when the
 # actions are unnormalized metres, or it truncates long plans. null disables clipping.
 clip_sample: 4.0
+prediction: eps  # eps | x | v (v = sqrt(ab) eps - sqrt(1 - ab) x0)
+loss: eps  # eps | x | v: the MSE space
+min_scale: 0.05  # floor of the sqrt(ab), sqrt(1 - ab) divisions in the loss

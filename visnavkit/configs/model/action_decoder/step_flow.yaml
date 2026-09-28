@@ -1,5 +1,8 @@
-# FlowMatchingPolicy's StepFlowHead (visnavkit.models.action.step_flow): flow matching from noise, one query per plan
-# step (+ step position + ego [v, w]).
+# FlowMatchingPolicy's StepFlowHead (visnavkit.models.action.step_flow): flow matching or diffusion from noise (the scheduler), one
+# query per plan step (+ step position + ego [v, w]).
+defaults:
+  - scheduler: flow  # flow | ddim; each takes prediction (eps | x | v) and loss (eps | x | v)
+  - _self_
 _target_: visnavkit.models.action.step_flow.StepFlowHead
 _partial_: true  # the policy passes dim
 num_pts: ${plan_len_points}
@@ -7,5 +10,5 @@ num_layers: 4
 num_heads: 8
 dropout: 0.1
 ego_mask_p: 0.9  # training: hide each ego channel (v, w) w.p. 0.9
-sample_steps: 10  # Euler steps at t = 0, 0.1, ..., 0.9
+sample_steps: 10  # scheduler steps from t = 1 (noise) to 0
 num_samples: 1  # eval / export randn: N(0, I) samples per decision (zero noise is always 1 plan)

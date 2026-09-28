@@ -22,9 +22,12 @@ def make_betas(train_timesteps: int, beta_schedule: str, beta_start: float, beta
 
 
 class DDIMScheduler(BaseScheduler):
-    """DDPM noise prediction with deterministic DDIM sampling.
+    """DDPM forward process with deterministic DDIM sampling; eps / x / v prediction and loss (``BaseScheduler``).
 
     Args:
+        prediction, loss: eps | x | v; eps / eps is DDPM, v is Salimans & Ho's ``sqrt(ab) eps - sqrt(1 - ab) x0``.
+        min_scale: floor of the sqrt(ab) and sqrt(1 - ab) divisions in the loss (sampling divides exactly: both are
+            positive on the sampling times, and ``clip_sample`` bounds x0).
         clip_sample: symmetric clamp on the predicted clean sample, in the decoder's
             **normalized action units** (diffusers clips at 1.0 for its ``[-1, 1]`` data). It
             keeps the ``1 / sqrt(alpha_bar)`` term bounded near ``t = 1``; without a normalizer
@@ -39,8 +42,11 @@ class DDIMScheduler(BaseScheduler):
         beta_start: float = 1e-4,
         beta_end: float = 0.02,
         clip_sample: float | None = 4.0,
+        prediction: str = "eps",
+        loss: str = "eps",
+        min_scale: float = 0.05,
     ):
-        super().__init__()
+        super().__init__(prediction, loss, min_scale)
         if train_timesteps < 2:
             raise ValueError("train_timesteps must be at least 2")
         self.train_timesteps = train_timesteps
@@ -60,13 +66,16 @@ class DDIMScheduler(BaseScheduler):
         alpha = self._broadcast(self._alpha(t), x0)
         return alpha.sqrt() * x0 + (1 - alpha).sqrt() * noise
 
-    def target(self, x0, noise, t):
-        return noise
+    def coeffs(self, t):
+        alpha = self._alpha(t)
+        return alpha.sqrt(), (1 - alpha).sqrt()
+
+    def v_coeffs(self, a, s):
+        return -s, a
 
     def step(self, model_output, x_t, t, t_next):
-        alpha = self._broadcast(self._alpha(t), x_t)
         alpha_next = self._broadcast(self._alpha(t_next), x_t)
-        x0 = (x_t - (1 - alpha).sqrt() * model_output) / alpha.sqrt()
+        x0, eps = self.split(model_output, x_t, t)
         if self.clip_sample is not None:
             x0 = x0.clamp(-self.clip_sample, self.clip_sample)
-        return alpha_next.sqrt() * x0 + (1 - alpha_next).sqrt() * model_output
+        return alpha_next.sqrt() * x0 + (1 - alpha_next).sqrt() * eps

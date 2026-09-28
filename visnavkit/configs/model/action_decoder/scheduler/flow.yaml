@@ -4,3 +4,6 @@ logit_normal_std: 1.0
 beta_alpha: 1.5
 beta_beta: 1.0
 shift: 1.0  # sampling-time shift t -> s*t / (1 + (s-1)*t); > 1 spends more steps at high noise
+prediction: v  # eps | x | v: what the denoiser outputs
+loss: v  # eps | x | v: the MSE space (x / v: JiT)
+min_scale: 0.05  # floor of the t and 1 - t divisions when converting

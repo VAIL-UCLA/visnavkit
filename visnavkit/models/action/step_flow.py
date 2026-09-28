@@ -1,11 +1,13 @@
-"""StepFlowHead: flow matching from N(0, I) with one query token per plan step (``flow_matching_policy``).
+"""StepFlowHead: flow matching or diffusion from N(0, I) with one query token per plan step (``flow_matching_policy``).
 
-The state is AnchorFlowHead's: the normalised per-step [dx, dy, dyaw, v, w] under the row's ``action_bounds``; t = 0
-noise, 1 data, t ~ U(0, 1) in training. Query per step = Linear(x_t step) + learned step position + the ego [v, w] embedding
-(each channel hidden w.p. ``ego_mask_p`` in training); ``num_layers`` DiT blocks [adaLN-Zero(flow time) self-attention
-over the steps, cross-attention to the frame's kv, FF] -> the velocity per step. Loss MSE(velocity, x1 - eps).
-Inference: ``sample_steps`` Euler steps from noise 0 (one deterministic plan) or from N(0, I) draws (``num_samples``
-plans, equal probabilities: no scorer).
+The state is AnchorFlowHead's: the normalised per-step [dx, dy, dyaw, v, w] under the row's ``action_bounds``. The
+``scheduler`` sets the process (``FlowMatchingScheduler`` / ``DDIMScheduler``: t = 1 noise, 0 data), the training times,
+what the head outputs (``prediction``: eps | x | v) and the loss space (``loss``: eps | x | v). Query per step =
+Linear(x_t step) + learned step position + the ego [v, w] embedding (each channel hidden w.p. ``ego_mask_p`` in
+training); ``num_layers`` DiT blocks [adaLN-Zero(time) self-attention over the steps, cross-attention to the frame's kv,
+FF] -> the output per step. Loss: MSE in the loss space, summed over the 5 channels. Inference: ``sample_steps``
+scheduler steps from noise 0 (one deterministic plan) or from N(0, I) draws (``num_samples`` plans, equal
+probabilities: no scorer).
 """
 
 import torch
@@ -23,9 +25,19 @@ class StepFlowHead(nn.Module):
     norm, metric, ego_cond = AnchorFlowHead.norm, AnchorFlowHead.metric, AnchorFlowHead.ego_cond
 
     def __init__(
-        self, dim, num_pts=80, num_layers=4, num_heads=8, dropout=0.1, ego_mask_p=0.9, sample_steps=4, num_samples=1
+        self,
+        dim,
+        scheduler,
+        num_pts=80,
+        num_layers=4,
+        num_heads=8,
+        dropout=0.1,
+        ego_mask_p=0.9,
+        sample_steps=10,
+        num_samples=1,
     ):
         super().__init__()
+        self.scheduler = scheduler
         self.num_pts, self.ego_mask_p, self.sample_steps, self.num_samples = (
             num_pts,
             ego_mask_p,
@@ -43,10 +55,7 @@ class StepFlowHead(nn.Module):
         nn.init.zeros_(self.ada_out[-1].weight), nn.init.zeros_(self.ada_out[-1].bias)
         self.out = nn.Linear(dim, self.pose_size)
 
-    def sample_time(self, n, device):
-        return torch.rand(n, device=device)
-
-    def velocity(self, x, t, kv, ego):
+    def denoise(self, x, t, kv, ego):
         """``(N, T, 5)``, ``(N,)``, kv ``(N, L, D)``, ego ``(N, D)`` -> ``(N, T, 5)``."""
         c = self.time_embed(t).to(kv.dtype)
         h = self.inp(x.to(kv.dtype)) + self.pos + ego[:, None]
@@ -56,19 +65,20 @@ class StepFlowHead(nn.Module):
         return self.out(modulate(self.norm_out(h), shift, scale))
 
     def loss(self, kv, actions, bounds, ego_vw):
-        """MSE(velocity, x1 - eps) on the normalised state, summed over its 5 channels."""
+        """MSE in the scheduler's loss space on the normalised state, summed over its 5 channels."""
         kv = self.kv_norm(kv)
-        x1 = self.norm(actions, bounds)
-        noise = torch.randn_like(x1)
-        t = self.sample_time(len(kv), kv.device)
-        x_t = (1 - t)[:, None, None] * noise + t[:, None, None] * x1
+        x0 = self.norm(actions, bounds)
+        noise = torch.randn_like(x0)
+        t = self.scheduler.sample_t(len(kv), kv.device)
+        x_t = self.scheduler.add_noise(x0, noise, t)
         ego = self.ego(self.ego_cond(ego_vw, bounds)).to(kv.dtype)
-        v = F.mse_loss(self.velocity(x_t, t, kv, ego).float(), x1 - noise, reduction="none").sum(-1).mean()
+        out = self.scheduler.predicted(self.denoise(x_t, t, kv, ego).float(), x_t, t)
+        v = F.mse_loss(out, self.scheduler.target(x0, noise, t), reduction="none").sum(-1).mean()
         return dict(total=v, reg=v)
 
     @torch.no_grad()
     def sample(self, kv, bounds, ego_vw, noise=None):
-        """Euler from ``noise`` ``(N, S, T, 5)`` (None: zeros, S = 1) -> metric ``(N, S, T, 5)`` [x, y, yaw, v, w]."""
+        """Scheduler steps from ``noise`` ``(N, S, T, 5)`` (None: zeros, S = 1) -> metric ``(N, S, T, 5)`` [x, y, yaw, v, w]."""
         n = len(kv)
         if noise is None:
             noise = kv.new_zeros(n, 1, self.num_pts, self.pose_size, dtype=torch.float32)
@@ -76,9 +86,10 @@ class StepFlowHead(nn.Module):
         kv, bounds, ego_vw = (v.repeat_interleave(s, 0) for v in (kv, bounds, ego_vw))
         kv = self.kv_norm(kv)
         ego = self.ego(self.ego_cond(ego_vw, bounds)).to(kv.dtype)
-        x, dt = noise.flatten(0, 1).float(), 1.0 / self.sample_steps
-        for i in range(self.sample_steps):
-            x = x + dt * self.velocity(x, torch.full((n * s,), i * dt, device=kv.device), kv, ego).float()
+        x, times = noise.flatten(0, 1).float(), self.scheduler.step_times(self.sample_steps)
+        for t, t_next in zip(times[:-1], times[1:]):
+            t, t_next = x.new_full((n * s,), t), x.new_full((n * s,), t_next)
+            x = self.scheduler.step(self.denoise(x, t, kv, ego).float(), x, t, t_next)
         return self.metric(x, bounds).view(n, s, self.num_pts, self.pose_size)
 
     def randn(self, n, device):

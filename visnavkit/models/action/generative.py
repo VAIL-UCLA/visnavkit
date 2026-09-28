@@ -134,7 +134,9 @@ class GenerativeDecoder(BaseActionDecoder):
         noise = torch.randn_like(x0)
         x_t = self.scheduler.add_noise(x0, noise, t)
         prediction = self.denoiser(x_t, t, cond, tokens)
-        per_sample = F.mse_loss(prediction, self.scheduler.target(x0, noise, t), reduction="none").mean(dim=(1, 2))
+        per_sample = F.mse_loss(
+            self.scheduler.predicted(prediction, x_t, t), self.scheduler.target(x0, noise, t), reduction="none"
+        ).mean(dim=(1, 2))
         reg = per_sample.mean()
         return dict(total=reg + self.loss_cls_alpha * cls, reg=reg, cls=cls), dict(
             imitation_loss_per_sample=per_sample.detach()
